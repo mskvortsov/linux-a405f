@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: GPL-2.0
+/dts-v1/;
+#include "exynos7885.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	model = "Samsung Galaxy A40";
+	compatible = "samsung,a40", "samsung,exynos7885";
+	chassis-type = "handset";
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <1>;
+		ranges;
+
+		stdout-path = "fb0";
+
+		bootargs = "pmos.nosplash clk_ignore_unused pd_ignore_unused";
+
+		linux,initrd-start = <0x89000000>;
+		linux,initrd-end = <0x898FFFFF>;
+
+
+		fb0: framebuffer@ec000000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0xec000000 (1080 * 2340 * 4)>;
+			width = <1080>;
+			height = <2340>;
+			stride = <(1080 * 4)>;
+			format = "a8r8g8b8";
+		};
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <1>;
+		ranges;
+
+		framebuffer_region@ec000000 {
+			reg = <0x0 0xec000000 (1080 * 2340 * 4)>;
+			no-map;
+		};
+
+		abox_rmem: memory@e9400000 {
+			reg = <0x0 0xe9400000 0x400000>;
+		};
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x3da00000>,
+		      <0x0 0xc0000000 0x40000000>;
+	};
+
+	reg_dummy: regulator-0 {
+		compatible = "regulator-fixed";
+		regulator-name = "dummy_reg";
+	};
+
+	/*tsp_ldo_en: tsp_ldo_en {
+		compatible = "regulator-fixed";
+		regulator-name = "tsp_ldo_en";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&gpg2 1 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+//		regulator-boot-on;
+	};*/
+};
+
+/*&i2c6 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	samsung,i2c-sda-delay = <100>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	status = "okay";
+
+	touchscreen@20 {
+		compatible = "zinitix,bt532";
+		reg = <0x20>;
+		interrupt-parent = <&gpa0>;
+		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&touch_irq>;
+
+		touchscreen-size-x = <1080>;
+		touchscreen-size-y = <2340>;
+
+		vdd-supply = <&vdd_ldo34>;
+	};
+};*/
+
+&oscclk {
+	clock-frequency = <0x18cba80>;
+};
+
+&usbdrd {
+	status = "okay";
+	vdd10-supply = <&reg_dummy>;
+	vdd33-supply = <&reg_dummy>;
+};
+
+&usbdrd_dwc3 {
+	dr_mode = "peripheral";
+	snps,quirk-frame-length-adjustment = <0x20>;
+};
+
+&usbdrd_phy {
+	status = "okay";
+};
