@@ -59,6 +59,16 @@
 		regulator-name = "dummy_reg";
 	};
 
+	tsp_avdd: tsp-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "tsp_avdd";
+		regulator-min-microvolt = <0x325aa0>;
+		regulator-max-microvolt = <0x325aa0>;
+		gpio = <&gpg2 1 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+	};
+
 	/*tsp_ldo_en: tsp_ldo_en {
 		compatible = "regulator-fixed";
 		regulator-name = "tsp_ldo_en";
@@ -68,6 +78,32 @@
 		enable-active-high;
 //		regulator-boot-on;
 	};*/
+};
+
+&i2c_4 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	samsung,i2c-sda-delay = <0x64>;
+	samsung,i2c-max-bus-freq = <0x61a80>;
+
+	status = "okay";
+
+	touchscreen@20 {
+		compatible = "zinitix,bt532";
+		reg = <0x20>;
+
+		interrupt-parent = <&gpa0>;
+		interrupts = <0 IRQ_TYPE_LEVEL_LOW>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&touch_irq>;
+		pinctrl-1 = <&touch_input>;
+
+		touchscreen-size-x = <1080>;
+		touchscreen-size-y = <2340>;
+		vdd-supply = <&tsp_avdd>;
+
+	};
 };
 
 /*&i2c6 {
@@ -94,6 +130,21 @@
 		vdd-supply = <&vdd_ldo34>;
 	};
 };*/
+
+&pinctrl_alive {
+	touch_irq: touch-irq-pins {
+		samsung,pins = "gpa0-0";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	touch_input: touch-input {
+		samsung,pins = "gpa0-0";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
+		samsung,pin-pud-pdn = <EXYNOS_PIN_PULL_NONE>;
+	};
+};
 
 &oscclk {
 	clock-frequency = <0x18cba80>;
