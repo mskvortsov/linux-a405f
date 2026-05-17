@@ -69,6 +69,32 @@
 		regulator-boot-on;
 	};
 
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&key_power &key_voldown &key_volup>;
+
+		key-power {
+			label = "gpio-keys: KEY_POWER";
+			gpios = <&gpa1 7 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_POWER>;
+		};
+
+		key-voldown {
+			label = "gpio-keys: KEY_VOLUMEDOWN";
+			gpios = <&gpa1 6 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEDOWN>;
+		};
+
+		key-volup {
+			label = "gpio-keys: KEY_VOLUMEUP";
+			gpios = <&gpa1 5 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+		};
+	};
+
+
 	/*tsp_ldo_en: tsp_ldo_en {
 		compatible = "regulator-fixed";
 		regulator-name = "tsp_ldo_en";
@@ -93,7 +119,7 @@
 		reg = <0x20>;
 
 		interrupt-parent = <&gpa0>;
-		interrupts = <0 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <0 IRQ_TYPE_LEVEL_HIGH>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&touch_irq>;
@@ -144,6 +170,28 @@
 		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
 		samsung,pin-pud-pdn = <EXYNOS_PIN_PULL_NONE>;
 	};
+
+	key_power: key-power-pins {
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pins = "gpa1-7";
+	};
+
+	key_voldown: key-voldown-pins {
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pins = "gpa1-6";
+	};
+
+	key_volup: key-volup-pins {
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pins = "gpa1-5";
+	};
+
 };
 
 &oscclk {
