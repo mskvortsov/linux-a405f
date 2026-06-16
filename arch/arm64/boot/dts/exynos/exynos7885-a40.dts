@@ -38,13 +38,97 @@
 		#size-cells = <1>;
 		ranges;
 
-		framebuffer_region@ec000000 {
-			reg = <0x0 0xec000000 (1080 * 2340 * 4)>;
+		/*
+		 * Firmware-owned regions taken verbatim from the downstream
+		 * (4.4) device tree's /reserved-memory. Leaving any of these
+		 * out lets Linux hand the RAM to the page allocator while the
+		 * secure firmware / modem (CP) keep writing to it, which
+		 * intermittently corrupts whatever the kernel placed there
+		 * (e.g. the unpacked initramfs -> random "Exec format error").
+		 */
+		sec_debug_magic_rmem: sec-debug-magic@80000000 {
+			reg = <0x0 0x80000000 0x1000>;
+		};
+
+		dram_test_rmem: dram-test@80002000 {
+			reg = <0x0 0x80002000 0x2000>;
+		};
+
+		/*
+		 * Exynos Snapshot (ESS / debug-snapshot). Downstream passes
+		 * ess_setup=0x86000000 on the cmdline; the ess driver then
+		 * memblock_reserve()s a block sized by its item table (up to
+		 * log_kevents 8M + log_kernel 2M + log_platform 4M + log_sfr 4M
+		 * + log_etm 8M + 2M header ~= 28M). It is NOT in the downstream
+		 * /reserved-memory, so copying that node alone missed it. The
+		 * ETR/coresight + secure firmware keep writing here regardless
+		 * of the running OS, so leave a generous 32M hole. Ends at
+		 * 0x88000000, below the wrapper's initrd (0x89000000).
+		 */
+		ess_rmem: exynos-snapshot@86000000 {
+			reg = <0x0 0x86000000 0x2000000>;
 			no-map;
 		};
 
-		abox_rmem: memory@e9400000 {
+		tima_rmem: tima@b8000000 {
+			reg = <0x0 0xb8000000 0x200000>;
+		};
+
+		/*
+		 * Secure-world / TEE carve-out at the very top of the low
+		 * DRAM bank (0x80000000 + 0x3da00000 = 0xbda00000). S-Boot /
+		 * EL3 owns 0xbbc00000-0xbda00000 (top 30 MiB) and writes to
+		 * it independently of the running OS. The downstream
+		 * bootloader reserves it at runtime, so it is NOT present in
+		 * the downstream DT /reserved-memory we copied. Found
+		 * empirically with memtest=17 - it is the only RAM range that
+		 * fails the pattern test. Leaving it usable let Linux place
+		 * page-cache (the unpacked initramfs) there, which the secure
+		 * world then zeroed -> intermittent "Exec format error" /
+		 * page-granular all-zero files during early boot.
+		 */
+		secure_dram_rmem: secure-dram@bbc00000 {
+			reg = <0x0 0xbbc00000 0x1e00000>;
+			no-map;
+		};
+
+		seclog_rmem: seclog@c0000000 {
+			reg = <0x0 0xc0000000 0x80000>;
+		};
+
+		/*
+		 * Legacy /memreserve/ 0xE0000000 0xD00000 from the downstream
+		 * exynos7885-rmem.dtsi (secure firmware / iommu owned).
+		 */
+		secfw_rmem: secfw@e0000000 {
+			reg = <0x0 0xe0000000 0xd00000>;
+			no-map;
+		};
+
+		wifibt_rmem: wifibt@e9000000 {
+			reg = <0x0 0xe9000000 0x400000>;
+		};
+
+		abox_rmem: abox@e9400000 {
 			reg = <0x0 0xe9400000 0x400000>;
+		};
+
+		framebuffer_region@ec000000 {
+			reg = <0x0 0xec000000 0x1400000>;
+			no-map;
+		};
+
+		/* modem_if: downstream size is 0x8800000 (ends 0xfdc00000) */
+		modem_rmem: modem@f5400000 {
+			reg = <0x0 0xf5400000 0x8800000>;
+		};
+
+		cp_ram_logging_rmem: cp-ram-logging@fdc00000 {
+			reg = <0x0 0xfdc00000 0x2000000>;
+		};
+
+		gnss_rmem: gnss@ffc00000 {
+			reg = <0x0 0xffc00000 0x400000>;
 		};
 	};
 
