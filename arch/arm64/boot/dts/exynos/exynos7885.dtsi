@@ -222,6 +222,15 @@
 			#mbox-cells = <0>;
 		};
 
+		tmu: tmu@10070000 {
+			compatible = "samsung,exynos7885-tmu";
+			reg = <0x10070000 0x400>;
+			interrupts = <GIC_SPI 231 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&cmu_peri CLK_GOUT_TMU_PCLK>;
+			clock-names = "tmu_apbif";
+			#thermal-sensor-cells = <0>;
+		};
+
 		cmu_peri: clock-controller@10010000 {
 			compatible = "samsung,exynos7885-cmu-peri";
 			reg = <0x10010000 0x8000>;
@@ -544,6 +553,77 @@
 			clock-names = "i2c";
 
 			status = "disabled";
+		};
+
+		usbdrd: usb@13600000 {
+			compatible = "samsung,exynos7885-dwusb3";
+			ranges = <0x0 0x13600000 0x10000>;
+			clocks = <&cmu_fsys CLK_FSYS_USB30DRD_BUS_CLK_EARLY>,
+				 <&cmu_fsys CLK_FSYS_USB30DRD_REF_CLK>;
+			clock-names = "bus_early", "ref";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			status = "disabled";
+
+			usbdrd_dwc3: usb@0 {
+				compatible = "snps,dwc3";
+				reg = <0x0 0x10000>;
+				interrupts = <GIC_SPI 135 IRQ_TYPE_LEVEL_HIGH>;
+				phys = <&usbdrd_phy 0>;
+				phy-names = "usb2-phy";
+				/*
+				 * SoC in theory supports SS but no device has it.
+				 * Actual capabilities unknown.
+				 */
+				maximum-speed = "high-speed";
+				/*
+				 * Keep the USB2 PHY clock running. This SoC's
+				 * USB2 PHY has no free-running clock, but the
+				 * controller defaults to assuming one exists
+				 * (GUSB2PHYCFG.U2_FREECLK_EXISTS=1) and lets the
+				 * PHY clock stop; combined with PHY auto-suspend,
+				 * ep0 config commands then intermittently time
+				 * out at gadget start ("failed to enable ep0out").
+				 * Clear both: no free clock (like exynos2200) and
+				 * no auto-suspend (like gs101, same PHY IP).
+				 */
+				snps,dis-u2-freeclk-exists-quirk;
+				snps,dis_u2_susphy_quirk;
+				snps,usb2-gadget-lpm-disable;
+			};
+		};
+
+		usbdrd_phy: phy@135d0000 {
+			compatible = "samsung,exynos7885-usbdrd-phy";
+			reg = <0x135d0000 0x100>;
+			clocks = <&cmu_fsys CLK_FSYS_USB30DRD_ACLK_20PHYCTRL>,
+				 <&cmu_fsys CLK_FSYS_USB20PHY_CLKCORE>;
+			clock-names = "phy", "ref";
+			samsung,pmu-syscon = <&pmu_system_controller>;
+			#phy-cells = <1>;
+			status = "disabled";
+		};
+	};
+
+	thermal-zones {
+		cpu_thermal: cpu-thermal {
+			polling-delay-passive = <1000>;
+			polling-delay = <1000>;
+			thermal-sensors = <&tmu>;
+
+			trips {
+				cpu_alert: cpu-alert {
+					temperature = <95000>;
+					hysteresis = <5000>;
+					type = "passive";
+				};
+
+				cpu_crit: cpu-crit {
+					temperature = <115000>;
+					hysteresis = <0>;
+					type = "critical";
+				};
+			};
 		};
 	};
 };
