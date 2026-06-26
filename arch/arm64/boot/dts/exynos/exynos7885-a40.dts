@@ -594,3 +594,12 @@
 		};
 	};
 };
+
+&gpu {
+	/*
+	 * No mali-supply: vdd_g3d (buck5) is ACPM-owned and not host-settable,
+	 * so the GPU rail is left to firmware and devfreq does frequency-only
+	 * DVFS (see the gpu_opp_table in the SoC dtsi).
+	 */
+	status = "okay";
+};

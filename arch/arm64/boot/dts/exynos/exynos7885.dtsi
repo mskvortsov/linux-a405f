@@ -509,6 +509,61 @@
 			};
 		};
 
+		pd_g3d: power-domain@11c840a0 {
+			compatible = "samsung,exynos5433-pd";
+			reg = <0x11c840a0 0x20>;
+			#power-domain-cells = <0>;
+			label = "G3D";
+		};
+
+		gpu: gpu@11500000 {
+			compatible = "samsung,exynos7885-mali", "arm,mali-bifrost";
+			reg = <0x11500000 0x5000>;
+			interrupts = <GIC_SPI 159 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 160 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 158 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "job", "mmu", "gpu";
+			clocks = <&cmu_top CLK_DOUT_CORE_G3D>;
+			power-domains = <&pd_g3d>;
+			operating-points-v2 = <&gpu_opp_table>;
+			#cooling-cells = <2>;
+			status = "disabled";
+		};
+
+		/*
+		 * Frequency-only OPPs: vdd_g3d (PMIC buck) is ACPM-owned and not
+		 * host-settable, so no opp-microvolt - the rail stays at the boot
+		 * voltage (which supports the 799.5 MHz top point) while devfreq
+		 * scales only the clock divider.  Rates are 799.5 MHz / 1..5.
+		 * opp-microwatt are rough estimates (voltage fixed, so dynamic
+		 * power scales ~linearly with frequency); they feed the Energy
+		 * Model used by the GPU thermal cooling device.
+		 */
+		gpu_opp_table: opp-table-gpu {
+			compatible = "operating-points-v2";
+
+			opp-159900000 {
+				opp-hz = /bits/ 64 <159900000>;
+				opp-microwatt = <240000>;
+			};
+			opp-199875000 {
+				opp-hz = /bits/ 64 <199875000>;
+				opp-microwatt = <300000>;
+			};
+			opp-266500000 {
+				opp-hz = /bits/ 64 <266500000>;
+				opp-microwatt = <400000>;
+			};
+			opp-399750000 {
+				opp-hz = /bits/ 64 <399750000>;
+				opp-microwatt = <600000>;
+			};
+			opp-799500000 {
+				opp-hz = /bits/ 64 <799500000>;
+				opp-microwatt = <1200000>;
+			};
+		};
+
 		watchdog: watchdog@10060000 {
 			compatible = "samsung,exynos8-wdt";
 			reg = <0x10060000 0x100>;
@@ -792,6 +847,18 @@
 				map1 {
 					trip = <&cpu_alert>;
 					cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+
+				/*
+				 * Only one TMU sensor is modelled in mainline, and
+				 * the thermal-OF core binds a sensor to a single
+				 * zone, so the GPU is throttled (devfreq cooling)
+				 * off this same SoC zone rather than a dedicated
+				 * gpu-thermal zone.
+				 */
+				map2 {
+					trip = <&cpu_alert>;
+					cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 				};
 			};
 		};
