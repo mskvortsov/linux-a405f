@@ -100,6 +100,7 @@
 		cpu0: cpu@100 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53";
+			capacity-dmips-mhz = <592>;
 			reg = <0x100>;
 			enable-method = "psci";
 			operating-points-v2 = <&cluster_a53_opp_table>;
@@ -110,6 +111,7 @@
 		cpu1: cpu@101 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53";
+			capacity-dmips-mhz = <592>;
 			reg = <0x101>;
 			enable-method = "psci";
 			operating-points-v2 = <&cluster_a53_opp_table>;
@@ -120,6 +122,7 @@
 		cpu2: cpu@102 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53";
+			capacity-dmips-mhz = <592>;
 			reg = <0x102>;
 			enable-method = "psci";
 			operating-points-v2 = <&cluster_a53_opp_table>;
@@ -130,6 +133,7 @@
 		cpu3: cpu@103 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53";
+			capacity-dmips-mhz = <592>;
 			reg = <0x103>;
 			enable-method = "psci";
 			operating-points-v2 = <&cluster_a53_opp_table>;
@@ -140,6 +144,7 @@
 		cpu4: cpu@200 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53";
+			capacity-dmips-mhz = <592>;
 			reg = <0x200>;
 			enable-method = "psci";
 			operating-points-v2 = <&cluster_a53_opp_table>;
@@ -150,6 +155,7 @@
 		cpu5: cpu@201 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53";
+			capacity-dmips-mhz = <592>;
 			reg = <0x201>;
 			enable-method = "psci";
 			operating-points-v2 = <&cluster_a53_opp_table>;
@@ -160,6 +166,7 @@
 		cpu6: cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a73";
+			capacity-dmips-mhz = <1024>;
 			reg = <0x0>;
 			enable-method = "psci";
 			operating-points-v2 = <&cluster_a73_opp_table>;
@@ -170,6 +177,7 @@
 		cpu7: cpu@1 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a73";
+			capacity-dmips-mhz = <1024>;
 			reg = <0x1>;
 			enable-method = "psci";
 			operating-points-v2 = <&cluster_a73_opp_table>;
