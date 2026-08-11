@@ -8,6 +8,14 @@
 
 #include <dt-bindings/clock/exynos7885.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/thermal/thermal.h>
+
+/*
+ * ACPM DVFS IDs for CPU clusters.
+ * CPUCL0 (0x0B040002) = big cluster (cpu6-7, Cortex-A73, up to 2184 MHz)
+ * CPUCL1 (0x0B040003) = little cluster (cpu0-5, Cortex-A53, up to 1690 MHz)
+ * Frequencies from downstream exynos7885 device tree.
+ */
 
 / {
 	compatible = "samsung,exynos7885";
@@ -94,6 +102,9 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x100>;
 			enable-method = "psci";
+			operating-points-v2 = <&cluster_a53_opp_table>;
+			samsung,acpm-dvfs-id = <0x0B040003>;
+			#cooling-cells = <2>;
 		};
 
 		cpu1: cpu@101 {
@@ -101,6 +112,9 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x101>;
 			enable-method = "psci";
+			operating-points-v2 = <&cluster_a53_opp_table>;
+			samsung,acpm-dvfs-id = <0x0B040003>;
+			#cooling-cells = <2>;
 		};
 
 		cpu2: cpu@102 {
@@ -108,6 +122,9 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x102>;
 			enable-method = "psci";
+			operating-points-v2 = <&cluster_a53_opp_table>;
+			samsung,acpm-dvfs-id = <0x0B040003>;
+			#cooling-cells = <2>;
 		};
 
 		cpu3: cpu@103 {
@@ -115,6 +132,9 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x103>;
 			enable-method = "psci";
+			operating-points-v2 = <&cluster_a53_opp_table>;
+			samsung,acpm-dvfs-id = <0x0B040003>;
+			#cooling-cells = <2>;
 		};
 
 		cpu4: cpu@200 {
@@ -122,6 +142,9 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x200>;
 			enable-method = "psci";
+			operating-points-v2 = <&cluster_a53_opp_table>;
+			samsung,acpm-dvfs-id = <0x0B040003>;
+			#cooling-cells = <2>;
 		};
 
 		cpu5: cpu@201 {
@@ -129,6 +152,9 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x201>;
 			enable-method = "psci";
+			operating-points-v2 = <&cluster_a53_opp_table>;
+			samsung,acpm-dvfs-id = <0x0B040003>;
+			#cooling-cells = <2>;
 		};
 
 		cpu6: cpu@0 {
@@ -136,6 +162,9 @@
 			compatible = "arm,cortex-a73";
 			reg = <0x0>;
 			enable-method = "psci";
+			operating-points-v2 = <&cluster_a73_opp_table>;
+			samsung,acpm-dvfs-id = <0x0B040002>;
+			#cooling-cells = <2>;
 		};
 
 		cpu7: cpu@1 {
@@ -143,7 +172,48 @@
 			compatible = "arm,cortex-a73";
 			reg = <0x1>;
 			enable-method = "psci";
+			operating-points-v2 = <&cluster_a73_opp_table>;
+			samsung,acpm-dvfs-id = <0x0B040002>;
+			#cooling-cells = <2>;
 		};
+	};
+
+	cluster_a53_opp_table: opp-table-a53 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-208000000  { opp-hz = /bits/ 64 <208000000>; };
+		opp-343000000  { opp-hz = /bits/ 64 <343000000>; };
+		opp-449000000  { opp-hz = /bits/ 64 <449000000>; };
+		opp-546000000  { opp-hz = /bits/ 64 <546000000>; };
+		opp-676000000  { opp-hz = /bits/ 64 <676000000>; };
+		opp-757000000  { opp-hz = /bits/ 64 <757000000>; };
+		opp-839000000  { opp-hz = /bits/ 64 <839000000>; };
+		opp-902000000  { opp-hz = /bits/ 64 <902000000>; };
+		opp-1014000000 { opp-hz = /bits/ 64 <1014000000>; };
+		opp-1144000000 { opp-hz = /bits/ 64 <1144000000>; };
+		opp-1248000000 { opp-hz = /bits/ 64 <1248000000>; };
+		opp-1352000000 { opp-hz = /bits/ 64 <1352000000>; };
+		opp-1482000000 { opp-hz = /bits/ 64 <1482000000>; };
+		opp-1586000000 { opp-hz = /bits/ 64 <1586000000>; };
+		opp-1690000000 { opp-hz = /bits/ 64 <1690000000>; };
+	};
+
+	cluster_a73_opp_table: opp-table-a73 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-728000000  { opp-hz = /bits/ 64 <728000000>; };
+		opp-936000000  { opp-hz = /bits/ 64 <936000000>; };
+		opp-1144000000 { opp-hz = /bits/ 64 <1144000000>; };
+		opp-1352000000 { opp-hz = /bits/ 64 <1352000000>; };
+		opp-1560000000 { opp-hz = /bits/ 64 <1560000000>; };
+		opp-1664000000 { opp-hz = /bits/ 64 <1664000000>; };
+		opp-1768000000 { opp-hz = /bits/ 64 <1768000000>; };
+		opp-1872000000 { opp-hz = /bits/ 64 <1872000000>; };
+		opp-1976000000 { opp-hz = /bits/ 64 <1976000000>; };
+		opp-2080000000 { opp-hz = /bits/ 64 <2080000000>; };
+		opp-2184000000 { opp-hz = /bits/ 64 <2184000000>; };
 	};
 
 	psci {
@@ -186,6 +256,12 @@
 			#size-cells = <0>;
 			mboxes = <&ap2apm_mailbox>;
 			shmem = <&apm_sram>;
+
+			cpufreq: cpufreq@0 {
+				compatible = "samsung,exynos-acpm-cpufreq";
+				reg = <0>;
+				samsung,acpm-dvfs-channel = <0>;
+			};
 		};
 	};
 
@@ -622,6 +698,17 @@
 					temperature = <115000>;
 					hysteresis = <0>;
 					type = "critical";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&cpu_alert>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+				map1 {
+					trip = <&cpu_alert>;
+					cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 				};
 			};
 		};
