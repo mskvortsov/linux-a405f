@@ -32,6 +32,10 @@
 
 #define EXYNOS850_MBOX_CHAN_COUNT	HWEIGHT32(EXYNOS850_MBOX_INTGR0_MASK)
 
+/* Exynos7885 shares the Exynos850 doorbell layout; these are the RX-side regs. */
+#define EXYNOS7885_MBOX_INTCR1		0x20	/* Interrupt Clear Register 1 (AP clears CM4→AP pending) */
+#define EXYNOS7885_MBOX_INTSR1		0x28	/* Interrupt Status Register 1 (CM4→AP notification status) */
+
 /**
  * struct exynos_mbox_driver_data - platform-specific mailbox configuration.
  * @intgr:		offset to the IRQ generation register, doorbell
@@ -43,6 +47,8 @@
  *			interrupts.
  * @num_chans:		number of channels the mailbox can support (hardware
  *			capability).
+ * @clear_rx:		clear stale CM4->AP notifications (INTSR1) via INTCR1
+ *			before each doorbell and at probe.
  */
 struct exynos_mbox_driver_data {
 	u32 intgr;
@@ -50,6 +56,7 @@ struct exynos_mbox_driver_data {
 	u32 intmr;
 	u32 intmr_mask;
 	int num_chans;
+	bool clear_rx;
 };
 
 /**
@@ -70,6 +77,15 @@ static const struct exynos_mbox_driver_data exynos850_mbox_data = {
 	.intmr = EXYNOS850_MBOX_INTMR1,
 	.intmr_mask = EXYNOS850_MBOX_INTMR1_MASK,
 	.num_chans = EXYNOS850_MBOX_CHAN_COUNT,
+};
+
+static const struct exynos_mbox_driver_data exynos7885_mbox_data = {
+	.intgr = EXYNOS850_MBOX_INTGR0,
+	.intgr_shift = 16,
+	.intmr = EXYNOS850_MBOX_INTMR1,
+	.intmr_mask = EXYNOS850_MBOX_INTMR1_MASK,
+	.num_chans = EXYNOS850_MBOX_CHAN_COUNT,
+	.clear_rx = true,
 };
 
 static const struct exynos_mbox_driver_data exynos_gs101_mbox_data = {
@@ -95,6 +111,14 @@ static int exynos_mbox_send_data(struct mbox_chan *chan, void *data)
 		dev_err(dev, "Unsupported channel type [%d]\n", msg->chan_type);
 		return -EINVAL;
 	}
+
+	/*
+	 * Clear the CM4→AP notification bit for this channel left over from the
+	 * previous transfer. In polling mode INTSR1 is never consumed by an ISR,
+	 * so clear it here before arming the next doorbell.
+	 */
+	if (exynos_mbox->data->clear_rx)
+		writel(BIT(msg->chan_id), exynos_mbox->regs + EXYNOS7885_MBOX_INTCR1);
 
 	/* Ring the doorbell */
 	writel(BIT(msg->chan_id) << exynos_mbox->data->intgr_shift,
@@ -135,6 +159,10 @@ static const struct of_device_id exynos_mbox_match[] = {
 	{
 		.compatible = "samsung,exynos850-mbox",
 		.data = &exynos850_mbox_data
+	},
+	{
+		.compatible = "samsung,exynos7885-mbox",
+		.data = &exynos7885_mbox_data
 	},
 	{},
 };
@@ -187,6 +215,19 @@ static int exynos_mbox_probe(struct platform_device *pdev)
 
 	/* Mask out all interrupts. We support just polling channels for now. */
 	writel(data->intmr_mask, exynos_mbox->regs + data->intmr);
+
+	if (data->clear_rx) {
+		/*
+		 * Clear any stale CM4→AP notifications left by a previous kernel.
+		 * The vendor driver clears INTCR1 after each RX drain; without this
+		 * the CM4 may see its previous INTSR1 as unacknowledged and refuse
+		 * to process new requests on those channels.
+		 */
+		u32 intsr1 = readl(exynos_mbox->regs + EXYNOS7885_MBOX_INTSR1);
+
+		if (intsr1)
+			writel(intsr1, exynos_mbox->regs + EXYNOS7885_MBOX_INTCR1);
+	}
 
 	return devm_mbox_controller_register(dev, mbox);
 }

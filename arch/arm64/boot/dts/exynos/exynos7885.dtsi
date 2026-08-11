@@ -214,7 +214,7 @@
 		};
 
 		ap2apm_mailbox: mailbox@11C40000 {
-			compatible = "google,gs101-mbox";
+			compatible = "samsung,exynos7885-mbox";
 			reg = <0x11C40000 0x1000>;
 			clocks = <&cmu_top CLK_GOUT_APM_MAILBOX_APM_AP_PCLK>;
 			clock-names = "pclk";
