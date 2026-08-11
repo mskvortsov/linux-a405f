@@ -22,6 +22,7 @@ properties:
     enum:
       - samsung,exynos7-decon
       - samsung,exynos7870-decon
+      - samsung,exynos7885-decon
 
   clocks:
     maxItems: 4
@@ -99,7 +100,11 @@ properties:
     maxItems: 1
 
   reg:
-    maxItems: 1
+    minItems: 1
+    maxItems: 2
+    description:
+      First entry is the DECON register block. Second entry (Exynos7885 only)
+      is the IDMA0 (DPP0/IDMA_G0) register block for the pixel DMA engine.
 
 required:
   - compatible

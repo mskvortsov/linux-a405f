@@ -9,6 +9,8 @@
 
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/delay.h>
+#include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -29,6 +31,7 @@
 #include "exynos_drm_fb.h"
 #include "exynos_drm_plane.h"
 #include "regs-decon7.h"
+#include "regs-decon7885.h"
 
 /*
  * DECON stands for Display and Enhancement controller.
@@ -36,24 +39,78 @@
 
 #define MIN_FB_WIDTH_FOR_16WORD_BURST 128
 
-#define WINDOWS_NR	2
+#define WINDOWS_NR	4
+
+struct decon_context;
 
 struct decon_data {
 	unsigned int vidw_buf_start_base;
 	unsigned int shadowcon_win_protect_shift;
 	unsigned int wincon_burstlen_shift;
+	unsigned int num_windows;
+	unsigned int default_win;
+	bool skip_clear_channels;
+	bool probe_only;
+	bool no_autoenable_irq;
+	bool skip_atomic_enable;
+	/*
+	 * Shallow DPMS: keep DECON scanning across off/on instead of disabling
+	 * windows and runtime-suspending.  Suspending stops the feed to the DSIM
+	 * and stalls its video FSM (which can't be cleanly restarted); the panel
+	 * is blanked via a display-off DCS instead.
+	 */
+	bool keep_alive_on_disable;
+	void (*hw_init)(struct decon_context *ctx);
+	void (*hw_commit)(struct exynos_drm_crtc *crtc);
+	void (*hw_update_plane)(struct exynos_drm_crtc *crtc,
+				struct exynos_drm_plane *plane);
+	void (*hw_disable_plane)(struct exynos_drm_crtc *crtc,
+				 struct exynos_drm_plane *plane);
+	int  (*hw_enable_vblank)(struct decon_context *ctx);
+	void (*hw_disable_vblank)(struct decon_context *ctx);
+	irqreturn_t (*hw_irq)(struct decon_context *ctx);
 };
 
 static const struct decon_data exynos7_decon_data = {
 	.vidw_buf_start_base = 0x80,
 	.shadowcon_win_protect_shift = 10,
 	.wincon_burstlen_shift = 11,
+	.num_windows = 2,
+	.default_win = 0,
 };
 
 static const struct decon_data exynos7870_decon_data = {
 	.vidw_buf_start_base = 0x880,
 	.shadowcon_win_protect_shift = 8,
 	.wincon_burstlen_shift = 10,
+	.num_windows = 2,
+	.default_win = 0,
+};
+
+/* forward declarations for 7885-specific hw ops */
+static void decon_init_7885(struct decon_context *ctx);
+static void decon_commit_7885(struct exynos_drm_crtc *crtc);
+static void decon_update_plane_7885(struct exynos_drm_crtc *crtc,
+				    struct exynos_drm_plane *plane);
+static void decon_disable_plane_7885(struct exynos_drm_crtc *crtc,
+				     struct exynos_drm_plane *plane);
+static int decon_enable_vblank_7885(struct decon_context *ctx);
+static void decon_disable_vblank_7885(struct decon_context *ctx);
+static irqreturn_t decon_irq_7885(struct decon_context *ctx);
+
+static const struct decon_data exynos7885_decon_data = {
+	.num_windows = 4,
+	.default_win = 3,
+	.skip_clear_channels = true,
+	.no_autoenable_irq = true,
+	.keep_alive_on_disable = true,
+	.hw_init = decon_init_7885,
+	.hw_commit = decon_commit_7885,
+	.hw_update_plane = decon_update_plane_7885,
+	.hw_disable_plane = decon_disable_plane_7885,
+	.hw_enable_vblank = decon_enable_vblank_7885,
+	.hw_disable_vblank = decon_disable_vblank_7885,
+	.hw_irq = decon_irq_7885,
 };
 
 struct decon_context {
@@ -68,7 +125,9 @@ struct decon_context {
 	struct clk			*eclk;
 	struct clk			*vclk;
 	void __iomem			*regs;
+	void __iomem			*idma_regs;
 	unsigned long			irq_flags;
+	int				irq;
 	bool				i80_if;
 	wait_queue_head_t		wait_vsync_queue;
 	atomic_t			wait_vsync_event;
@@ -86,6 +145,10 @@ static const struct of_device_id decon_driver_dt_match[] = {
 		.compatible = "samsung,exynos7870-decon",
 		.data = &exynos7870_decon_data,
 	},
+	{
+		.compatible = "samsung,exynos7885-decon",
+		.data = &exynos7885_decon_data,
+	},
 	{},
 };
 MODULE_DEVICE_TABLE(of, decon_driver_dt_match);
@@ -100,11 +163,6 @@ static const uint32_t decon_formats[] = {
 	DRM_FORMAT_ABGR8888,
 	DRM_FORMAT_RGBA8888,
 	DRM_FORMAT_BGRA8888,
-};
-
-static const enum drm_plane_type decon_win_types[WINDOWS_NR] = {
-	DRM_PLANE_TYPE_PRIMARY,
-	DRM_PLANE_TYPE_CURSOR,
 };
 
 /**
@@ -150,7 +208,7 @@ static void decon_clear_channels(struct decon_context *ctx)
 	u32 val;
 
 	/* Check if any channel is enabled. */
-	for (win = 0; win < WINDOWS_NR; win++) {
+	for (win = 0; win < ctx->data->num_windows; win++) {
 		val = readl(ctx->regs + WINCON(win));
 
 		if (val & WINCONx_ENWIN) {
@@ -178,7 +236,8 @@ static int decon_ctx_initialize(struct decon_context *ctx,
 {
 	ctx->drm_dev = drm_dev;
 
-	decon_clear_channels(ctx);
+	if (!ctx->data->skip_clear_channels)
+		decon_clear_channels(ctx);
 
 	return exynos_drm_register_dma(drm_dev, ctx->dev, &ctx->dma_priv);
 }
@@ -266,9 +325,20 @@ static void decon_commit(struct exynos_drm_crtc *crtc)
 static int decon_enable_vblank(struct exynos_drm_crtc *crtc)
 {
 	struct decon_context *ctx = crtc->ctx;
+	u32 clear_bit;
 	u32 val;
 
+	if (ctx->data->hw_enable_vblank) {
+		if (!test_and_set_bit(0, &ctx->irq_flags))
+			return ctx->data->hw_enable_vblank(ctx);
+		return 0;
+	}
+
 	if (!test_and_set_bit(0, &ctx->irq_flags)) {
+		clear_bit = ctx->i80_if ? VIDINTCON1_INT_I80 :
+					  VIDINTCON1_INT_FRAME;
+		writel(clear_bit, ctx->regs + VIDINTCON1);
+
 		val = readl(ctx->regs + VIDINTCON0);
 
 		val |= VIDINTCON0_INT_ENABLE;
@@ -280,6 +350,9 @@ static int decon_enable_vblank(struct exynos_drm_crtc *crtc)
 		}
 
 		writel(val, ctx->regs + VIDINTCON0);
+
+		if (ctx->data->no_autoenable_irq)
+			enable_irq(ctx->irq);
 	}
 
 	return 0;
@@ -290,7 +363,16 @@ static void decon_disable_vblank(struct exynos_drm_crtc *crtc)
 	struct decon_context *ctx = crtc->ctx;
 	u32 val;
 
+	if (ctx->data->hw_disable_vblank) {
+		if (test_and_clear_bit(0, &ctx->irq_flags))
+			ctx->data->hw_disable_vblank(ctx);
+		return;
+	}
+
 	if (test_and_clear_bit(0, &ctx->irq_flags)) {
+		if (ctx->data->no_autoenable_irq)
+			disable_irq_nosync(ctx->irq);
+
 		val = readl(ctx->regs + VIDINTCON0);
 
 		val &= ~VIDINTCON0_INT_ENABLE;
@@ -392,7 +474,10 @@ static void decon_atomic_begin(struct exynos_drm_crtc *crtc)
 	struct decon_context *ctx = crtc->ctx;
 	int i;
 
-	for (i = 0; i < WINDOWS_NR; i++)
+	if (ctx->data->hw_update_plane)
+		return;
+
+	for (i = 0; i < ctx->data->num_windows; i++)
 		decon_shadow_protect_win(ctx, i, true);
 }
 
@@ -411,6 +496,11 @@ static void decon_update_plane(struct exynos_drm_crtc *crtc,
 	unsigned int cpp = fb->format->cpp[0];
 	unsigned int pitch = fb->pitches[0];
 	unsigned int vidw_addr0_base = ctx->data->vidw_buf_start_base;
+
+	if (ctx->data->hw_update_plane) {
+		ctx->data->hw_update_plane(crtc, plane);
+		return;
+	}
 
 	/*
 	 * SHADOWCON/PRTCON register is used for enabling timing.
@@ -499,6 +589,11 @@ static void decon_disable_plane(struct exynos_drm_crtc *crtc,
 	unsigned int win = plane->index;
 	u32 val;
 
+	if (ctx->data->hw_disable_plane) {
+		ctx->data->hw_disable_plane(crtc, plane);
+		return;
+	}
+
 	/* protect windows */
 	decon_shadow_protect_win(ctx, win, true);
 
@@ -517,7 +612,14 @@ static void decon_atomic_flush(struct exynos_drm_crtc *crtc)
 	struct decon_context *ctx = crtc->ctx;
 	int i;
 
-	for (i = 0; i < WINDOWS_NR; i++)
+	if (ctx->data->hw_update_plane) {
+		writel(DECON7885_SHADOW_UPDATE_GLOBAL,
+		       ctx->regs + DECON7885_SHADOW_REG_UPDATE_REQ);
+		exynos_crtc_handle_event(crtc);
+		return;
+	}
+
+	for (i = 0; i < ctx->data->num_windows; i++)
 		decon_shadow_protect_win(ctx, i, false);
 	exynos_crtc_handle_event(crtc);
 }
@@ -544,19 +646,30 @@ static void decon_atomic_enable(struct exynos_drm_crtc *crtc)
 	struct decon_context *ctx = crtc->ctx;
 	int ret;
 
+	if (ctx->data->skip_atomic_enable) {
+		DRM_DEV_INFO(ctx->dev, "probe-only mode, skipping DECON atomic enable\n");
+		return;
+	}
+
 	ret = pm_runtime_resume_and_get(ctx->dev);
 	if (ret < 0) {
 		DRM_DEV_ERROR(ctx->dev, "failed to enable DECON device.\n");
 		return;
 	}
 
-	decon_init(ctx);
+	if (ctx->data->hw_init)
+		ctx->data->hw_init(ctx);
+	else
+		decon_init(ctx);
 
 	/* if vblank was enabled status, enable it again. */
 	if (test_and_clear_bit(0, &ctx->irq_flags))
 		decon_enable_vblank(ctx->crtc);
 
-	decon_commit(ctx->crtc);
+	if (ctx->data->hw_commit)
+		ctx->data->hw_commit(crtc);
+	else
+		decon_commit(ctx->crtc);
 }
 
 static void decon_atomic_disable(struct exynos_drm_crtc *crtc)
@@ -565,11 +678,20 @@ static void decon_atomic_disable(struct exynos_drm_crtc *crtc)
 	int i;
 
 	/*
+	 * Shallow DPMS (bootloader hand-off): keep DECON running and feeding the
+	 * DSIM so its video FSM never stalls.  The panel is blanked by a
+	 * display-off DCS; the framebuffer stays referenced, so there is no
+	 * destroyed-buffer scan-out hazard across an off/on cycle.
+	 */
+	if (ctx->data->keep_alive_on_disable)
+		return;
+
+	/*
 	 * We need to make sure that all windows are disabled before we
 	 * suspend that connector. Otherwise we might try to scan from
 	 * a destroyed buffer later.
 	 */
-	for (i = 0; i < WINDOWS_NR; i++)
+	for (i = 0; i < ctx->data->num_windows; i++)
 		decon_disable_plane(crtc, &ctx->planes[i]);
 
 	pm_runtime_put_sync(ctx->dev);
@@ -591,6 +713,9 @@ static irqreturn_t decon_irq_handler(int irq, void *dev_id)
 {
 	struct decon_context *ctx = (struct decon_context *)dev_id;
 	u32 val, clear_bit;
+
+	if (ctx->data->hw_irq)
+		return ctx->data->hw_irq(ctx);
 
 	val = readl(ctx->regs + VIDINTCON1);
 
@@ -619,6 +744,279 @@ out:
 	return IRQ_HANDLED;
 }
 
+/* ------------------------------------------------------------------ */
+/* Exynos7885-specific hw ops                                           */
+/* ------------------------------------------------------------------ */
+
+static void decon_init_7885(struct decon_context *ctx)
+{
+	void __iomem *regs = ctx->regs;
+	u32 val;
+	int tries;
+
+	/*
+	 * Bootloader hand-off: if DECON is already running (RUN_STATUS set), the
+	 * bootloader left a live RGB pipeline feeding the DSIM.  The DSIM uses a
+	 * matching skip-reset path that relies on that stream staying up — a
+	 * GLOBAL_SRESET here tears it down, stalls the DSIM video FSM at line 0
+	 * (VM_LINE_CNT never advances) and so closes the VFP window that LP DCS
+	 * commands need.  Mirror downstream decon_reg_init(), which detects a
+	 * bootloader-initialised DECON and skips re-init; only the later plane
+	 * update swaps IDMA to our framebuffer.
+	 */
+	if (readl(regs + DECON7885_GLOBAL_CONTROL) & DECON7885_GLOBAL_RUN_STATUS) {
+		dev_info(ctx->dev, "decon7885: already running (bootloader), skipping re-init\n");
+		return;
+	}
+
+	/* SW reset — self-clearing; wait for hardware to come out of reset */
+	writel(DECON7885_GLOBAL_SRESET, regs + DECON7885_GLOBAL_CONTROL);
+	for (tries = 2000; tries; tries--) {
+		if (!(readl(regs + DECON7885_GLOBAL_CONTROL) & DECON7885_GLOBAL_SRESET))
+			break;
+		udelay(10);
+	}
+	if (!tries)
+		dev_warn(ctx->dev, "decon7885: reset timed out\n");
+
+	/* Auto clock-gate on for DECON0 */
+	val = readl(regs + DECON7885_CLOCK_CONTROL_0);
+	val |= DECON7885_CLOCK_CONTROL_0_DECON0_MASK;
+	writel(val, regs + DECON7885_CLOCK_CONTROL_0);
+
+	/* SRAM: 8 K shared between FIFO-0 and floating region */
+	writel(DECON7885_SRAM_8K_DECON0, regs + DECON7885_SRAM_SHARE_ENABLE);
+
+	/* Operation mode: RGB/video (not i80 command mode) */
+	val = readl(regs + DECON7885_GLOBAL_CONTROL);
+	val &= ~DECON7885_GLOBAL_OP_MODE_I80;
+	writel(val, regs + DECON7885_GLOBAL_CONTROL);
+
+	/* RGB output order: BGR (FORMATTER_CONTROL, DECON0 non-DSC path) */
+	val = readl(regs + DECON7885_FORMATTER_CONTROL);
+	val &= ~DECON7885_FORMATTER_RGB_ORDER_MASK;
+	val |= DECON7885_FORMATTER_RGB_ORDER_F(DECON7885_RGB_ORDER_BGR);
+	writel(val, regs + DECON7885_FORMATTER_CONTROL);
+
+	/* Data path: no-comp → FF0 → formatter0 → DSIM_IF0 */
+	val = readl(regs + DECON7885_DATA_PATH_CONTROL_2);
+	val &= ~(DECON7885_COMP_LINKIF_WB_PATH_MASK |
+		 DECON7885_ENHANCE_LOGIC_PATH_MASK |
+		 DECON7885_APS_PATH_MASK |
+		 DECON7885_HSC_PATH_MASK);
+	val |= DECON7885_COMP_LINKIF_WB_PATH_F(DECON7885_DPATH_NOCOMP_FF0_FMT0_DSIMIF0);
+	writel(val, regs + DECON7885_DATA_PATH_CONTROL_2);
+
+	/* Keep per-frame enable off until commit sets display sizes */
+	val = readl(regs + DECON7885_GLOBAL_CONTROL);
+	val &= ~DECON7885_GLOBAL_DECON_EN_F;
+	writel(val, regs + DECON7885_GLOBAL_CONTROL);
+
+	/* Clear all pending interrupts */
+	writel(~0U, regs + DECON7885_INTERRUPT_PENDING);
+	writel(~0U, regs + DECON7885_EXTRA_INTERRUPT_PENDING);
+}
+
+static void decon_commit_7885(struct exynos_drm_crtc *crtc)
+{
+	struct decon_context *ctx = crtc->ctx;
+	struct drm_display_mode *mode = &crtc->base.state->adjusted_mode;
+	void __iomem *regs = ctx->regs;
+	u32 w = mode->hdisplay, h = mode->vdisplay;
+	u32 val;
+
+	if (!w || !h)
+		return;
+
+	/* Blender background canvas */
+	writel(DECON7885_BG_HEIGHT_F(h) | DECON7885_BG_WIDTH_F(w),
+	       regs + DECON7885_BLENDER_BG_IMAGE_SIZE_0);
+	writel(w * h, regs + DECON7885_BLENDER_BG_IMAGE_SIZE_1);
+
+	/* Splitter: full width feeds FF0 (single-DSI path, no overlap) */
+	writel(DECON7885_SPLITTER_HEIGHT_F(h) | DECON7885_SPLITTER_WIDTH_F(w),
+	       regs + DECON7885_SPLITTER_SIZE_CONTROL_0);
+	writel(w * h, regs + DECON7885_SPLITTER_SIZE_CONTROL_1);
+	writel(DECON7885_SPLITTER_SPLIT_IDX_F(w),
+	       regs + DECON7885_SPLITTER_SPLIT_IDX_CONTROL);
+	writel(0, regs + DECON7885_SPLITTER_OVERLAP_CONTROL);
+
+	/* Frame FIFO 0 */
+	writel(DECON7885_FRAME_FIFO_HEIGHT_F(h) | DECON7885_FRAME_FIFO_WIDTH_F(w),
+	       regs + DECON7885_FRAME_FIFO_0_SIZE_CONTROL_0);
+	writel(w * h, regs + DECON7885_FRAME_FIFO_0_SIZE_CONTROL_1);
+	writel(DECON7885_FRAME_FIFO_0_TH_F(w),
+	       regs + DECON7885_FRAME_FIFO_TH_CONTROL_0);
+
+	/* Formatter 0 */
+	writel(DECON7885_FORMATTER_HEIGHT_F(h) | DECON7885_FORMATTER_WIDTH_F(w),
+	       regs + DECON7885_FORMATTER0_SIZE_CONTROL_0);
+	writel(w * h, regs + DECON7885_FORMATTER0_SIZE_CONTROL_1);
+
+	/* Enable DECON: _EN latches at next vsync, _EN_F is immediate */
+	val = readl(regs + DECON7885_GLOBAL_CONTROL);
+	val |= DECON7885_GLOBAL_DECON_EN | DECON7885_GLOBAL_DECON_EN_F;
+	writel(val, regs + DECON7885_GLOBAL_CONTROL);
+
+	/* Global shadow update — latch all pending changes at next vsync */
+	writel(DECON7885_SHADOW_UPDATE_GLOBAL, regs + DECON7885_SHADOW_REG_UPDATE_REQ);
+}
+
+static void decon_update_plane_7885(struct exynos_drm_crtc *crtc,
+				    struct exynos_drm_plane *plane)
+{
+	struct exynos_drm_plane_state *state =
+				to_exynos_plane_state(plane->base.state);
+	struct decon_context *ctx = crtc->ctx;
+	struct drm_framebuffer *fb = state->base.fb;
+	void __iomem *regs = ctx->regs;
+	void __iomem *idma = ctx->idma_regs;
+	unsigned int win = plane->index;
+	u32 w = state->crtc.w, h = state->crtc.h;
+	u32 x = state->crtc.x, y = state->crtc.y;
+	u32 stride = fb->pitches[0] / fb->format->cpp[0];
+	dma_addr_t addr;
+	u32 fmt, val;
+
+	switch (fb->format->format) {
+	case DRM_FORMAT_ARGB8888: fmt = IDMA7885_FMT_ARGB8888; break;
+	case DRM_FORMAT_ABGR8888: fmt = IDMA7885_FMT_ABGR8888; break;
+	case DRM_FORMAT_RGBA8888: fmt = IDMA7885_FMT_RGBA8888; break;
+	case DRM_FORMAT_RGB565:   fmt = IDMA7885_FMT_RGB565;   break;
+	default:                  fmt = IDMA7885_FMT_BGRA8888; break;
+	}
+
+	addr = exynos_drm_fb_dma_addr(fb, 0);
+
+	/* IDMA0: DMA address, source buffer dims, crop offset, visible size */
+	writel(lower_32_bits(addr), idma + IDMA7885_IN_BASE_ADDR_Y);
+	/*
+	 * SRC_WIDTH is the source line stride the DMA walks, not the visible
+	 * width: it must come from the framebuffer pitch (which may be padded
+	 * for alignment, e.g. 1080 -> 1088), otherwise each line is fetched
+	 * with the wrong stride and the image shears.  IMG_SIZE below carries
+	 * the visible w*h.
+	 */
+	writel(IDMA7885_SRC_HEIGHT_F(fb->height) | IDMA7885_SRC_WIDTH_F(stride),
+	       idma + IDMA7885_SRC_SIZE);
+	writel(IDMA7885_SRC_OFFSET_Y_F(state->src.y) |
+	       IDMA7885_SRC_OFFSET_X_F(state->src.x),
+	       idma + IDMA7885_SRC_OFFSET);
+	writel(IDMA7885_IMG_HEIGHT_F(h) | IDMA7885_IMG_WIDTH_F(w),
+	       idma + IDMA7885_IMG_SIZE);
+	val = readl(idma + IDMA7885_IN_CON);
+	val &= ~IDMA7885_IMG_FORMAT_MASK;
+	val |= IDMA7885_IMG_FORMAT_F(fmt);
+	writel(val, idma + IDMA7885_IN_CON);
+
+	/*
+	 * The IDMA (DMA) block has its own shadow registers, latched by this
+	 * per-channel SFR update force - the DECON global shadow update does
+	 * not cover it.  Without this the DMA keeps fetching the previous
+	 * buffer, so page-flips never reach the panel.
+	 */
+	val = readl(idma + IDMA7885_ENABLE);
+	writel(val | IDMA7885_SFR_UPDATE_FORCE, idma + IDMA7885_ENABLE);
+
+	/* DECON: window start/end — Y[29:16] X[13:0] (swapped vs Exynos7) */
+	writel(DECON7885_WIN_STRPTR_Y_F(y) | DECON7885_WIN_STRPTR_X_F(x),
+	       regs + DECON7885_WIN_START_POSITION(win));
+	writel(DECON7885_WIN_ENDPTR_Y_F(y + h - 1) | DECON7885_WIN_ENDPTR_X_F(x + w - 1),
+	       regs + DECON7885_WIN_END_POSITION(win));
+	writel(w * h, regs + DECON7885_WIN_PIXEL_COUNT(win));
+
+	/* Fully opaque alpha */
+	writel(DECON7885_WIN_ALPHA1_F(0xff) | DECON7885_WIN_ALPHA0_F(0xff),
+	       regs + DECON7885_WIN_CONTROL_0(win));
+
+	/* Map window → DPP channel 0 (IDMA_G0) */
+	val = readl(regs + DECON7885_DATA_PATH_CONTROL_1);
+	val &= ~DECON7885_WIN_CHMAP_MASK(win);
+	val |= DECON7885_WIN_CHMAP_F(win, 0);
+	writel(val, regs + DECON7885_DATA_PATH_CONTROL_1);
+
+	/* Enable window, clear colormap */
+	val = readl(regs + DECON7885_DATA_PATH_CONTROL_0);
+	val |= DECON7885_WIN_EN_F(win);
+	val &= ~DECON7885_WIN_MAPCOLOR_EN_F(win);
+	writel(val, regs + DECON7885_DATA_PATH_CONTROL_0);
+
+	/* Per-window shadow update */
+	writel(DECON7885_SHADOW_UPDATE_WIN(win), regs + DECON7885_SHADOW_REG_UPDATE_REQ);
+}
+
+static void decon_disable_plane_7885(struct exynos_drm_crtc *crtc,
+				     struct exynos_drm_plane *plane)
+{
+	struct decon_context *ctx = crtc->ctx;
+	void __iomem *regs = ctx->regs;
+	unsigned int win = plane->index;
+	u32 val;
+
+	val = readl(regs + DECON7885_DATA_PATH_CONTROL_0);
+	val &= ~DECON7885_WIN_EN_F(win);
+	writel(val, regs + DECON7885_DATA_PATH_CONTROL_0);
+
+	writel(DECON7885_SHADOW_UPDATE_WIN(win), regs + DECON7885_SHADOW_REG_UPDATE_REQ);
+}
+
+static int decon_enable_vblank_7885(struct decon_context *ctx)
+{
+	u32 val;
+
+	/* Clear ALL stale pending bits before unmasking to prevent IRQ storm */
+	writel(~0U, ctx->regs + DECON7885_INTERRUPT_PENDING);
+	writel(~0U, ctx->regs + DECON7885_EXTRA_INTERRUPT_PENDING);
+
+	val = readl(ctx->regs + DECON7885_INTERRUPT_ENABLE);
+	val |= DECON7885_INT_EN_FRAME_START | DECON7885_INT_EN_GLOBAL;
+	writel(val, ctx->regs + DECON7885_INTERRUPT_ENABLE);
+
+	enable_irq(ctx->irq);
+	return 0;
+}
+
+static void decon_disable_vblank_7885(struct decon_context *ctx)
+{
+	u32 val;
+
+	disable_irq_nosync(ctx->irq);
+
+	val = readl(ctx->regs + DECON7885_INTERRUPT_ENABLE);
+	val &= ~(DECON7885_INT_EN_FRAME_START | DECON7885_INT_EN_GLOBAL |
+		 DECON7885_INT_EN_EXTRA);
+	writel(val, ctx->regs + DECON7885_INTERRUPT_ENABLE);
+}
+
+static irqreturn_t decon_irq_7885(struct decon_context *ctx)
+{
+	u32 val;
+
+	val = readl(ctx->regs + DECON7885_INTERRUPT_PENDING);
+	if (!val)
+		return IRQ_NONE;
+
+	/* Always clear ALL pending bits — returning IRQ_NONE with bits still
+	 * set on a level-triggered IRQ causes an infinite re-fire storm. */
+	writel(val, ctx->regs + DECON7885_INTERRUPT_PENDING);
+	if (val & DECON7885_INT_PEND_EXTRA)
+		writel(~0U, ctx->regs + DECON7885_EXTRA_INTERRUPT_PENDING);
+
+	if (!ctx->drm_dev || !drm_dev_has_vblank(ctx->drm_dev))
+		return IRQ_HANDLED;
+
+	if (val & DECON7885_INT_PEND_FRAME_START) {
+		drm_crtc_handle_vblank(&ctx->crtc->base);
+
+		if (atomic_read(&ctx->wait_vsync_event)) {
+			atomic_set(&ctx->wait_vsync_event, 0);
+			wake_up(&ctx->wait_vsync_queue);
+		}
+	}
+
+	return IRQ_HANDLED;
+}
+
 static int decon_bind(struct device *dev, struct device *master, void *data)
 {
 	struct decon_context *ctx = dev_get_drvdata(dev);
@@ -633,11 +1031,13 @@ static int decon_bind(struct device *dev, struct device *master, void *data)
 		return ret;
 	}
 
-	for (i = 0; i < WINDOWS_NR; i++) {
+	for (i = 0; i < ctx->data->num_windows; i++) {
 		ctx->configs[i].pixel_formats = decon_formats;
 		ctx->configs[i].num_pixel_formats = ARRAY_SIZE(decon_formats);
 		ctx->configs[i].zpos = i;
-		ctx->configs[i].type = decon_win_types[i];
+		ctx->configs[i].type = i == ctx->data->default_win ?
+					DRM_PLANE_TYPE_PRIMARY :
+					DRM_PLANE_TYPE_OVERLAY;
 
 		ret = exynos_plane_init(drm_dev, &ctx->planes[i], i,
 					&ctx->configs[i]);
@@ -645,7 +1045,7 @@ static int decon_bind(struct device *dev, struct device *master, void *data)
 			return ret;
 	}
 
-	exynos_plane = &ctx->planes[DEFAULT_WIN];
+	exynos_plane = &ctx->planes[ctx->data->default_win];
 	ctx->crtc = exynos_drm_crtc_create(drm_dev, &exynos_plane->base,
 			EXYNOS_DISPLAY_TYPE_LCD, &decon_crtc_ops, ctx);
 	if (IS_ERR(ctx->crtc)) {
@@ -704,6 +1104,15 @@ static int decon_probe(struct platform_device *pdev)
 	if (!ctx->regs)
 		return -ENOMEM;
 
+	if (ctx->data->hw_update_plane) {
+		ctx->idma_regs = of_iomap(dev->of_node, 1);
+		if (!ctx->idma_regs) {
+			dev_err(dev, "failed to map IDMA0 registers\n");
+			ret = -ENOMEM;
+			goto err_iounmap;
+		}
+	}
+
 	ctx->pclk = devm_clk_get(dev, "pclk_decon0");
 	if (IS_ERR(ctx->pclk)) {
 		dev_err(dev, "failed to get bus clock pclk\n");
@@ -735,8 +1144,11 @@ static int decon_probe(struct platform_device *pdev)
 	ret =  platform_get_irq_byname(pdev, ctx->i80_if ? "lcd_sys" : "vsync");
 	if (ret < 0)
 		goto err_iounmap;
+	ctx->irq = ret;
 
-	ret = devm_request_irq(dev, ret, decon_irq_handler, 0, "drm_decon", ctx);
+	ret = devm_request_irq(dev, ret, decon_irq_handler,
+			       ctx->data->no_autoenable_irq ? IRQF_NO_AUTOEN : 0,
+			       "drm_decon", ctx);
 	if (ret) {
 		dev_err(dev, "irq request failed.\n");
 		goto err_iounmap;
@@ -744,6 +1156,12 @@ static int decon_probe(struct platform_device *pdev)
 
 	init_waitqueue_head(&ctx->wait_vsync_queue);
 	atomic_set(&ctx->wait_vsync_event, 0);
+
+	if (ctx->data->probe_only) {
+		dev_info(dev, "probe-only mode, skipping DECON DPI setup\n");
+		iounmap(ctx->regs);
+		return 0;
+	}
 
 	platform_set_drvdata(pdev, ctx);
 
@@ -754,6 +1172,11 @@ static int decon_probe(struct platform_device *pdev)
 	}
 
 	pm_runtime_enable(dev);
+
+	if (ctx->data->probe_only) {
+		dev_info(dev, "probe-only mode, skipping DRM component registration\n");
+		return 0;
+	}
 
 	ret = component_add(dev, &decon_component_ops);
 	if (ret)
@@ -776,6 +1199,8 @@ static void decon_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(&pdev->dev);
 
+	if (ctx->idma_regs)
+		iounmap(ctx->idma_regs);
 	iounmap(ctx->regs);
 
 	component_del(&pdev->dev, &decon_component_ops);

@@ -377,6 +377,72 @@
 				      "dout_fsys_usb30drd";
 		};
 
+		cmu_dispaud: clock-controller@148d0000 {
+			compatible = "samsung,exynos7885-cmu-dispaud";
+			reg = <0x148d0000 0x1000>;
+			#clock-cells = <1>;
+
+			clocks = <&oscclk>;
+			clock-names = "oscclk";
+		};
+
+		dsi: dsi@14870000 {
+			compatible = "samsung,exynos7885-mipi-dsi";
+			reg = <0x14870000 0x100>;
+			interrupts = <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>;
+			samsung,esc-clock-frequency = <20000000>;
+			samsung,pll-clock-frequency = <26000000>;
+
+			clocks = <&cmu_dispaud CLK_GOUT_DISPAUD_BUS_DPU>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_MUX_PLL>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_MUX_MIPIPHY_TXBYTECLKHS_USER>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_MUX_MIPIPHY_RXCLKESC0_USER>;
+			clock-names = "bus", "pll", "byte", "esc";
+
+			phys = <&mipi_phy 1>;
+			phy-names = "dsim";
+
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					dsi_from_decon: endpoint {
+						remote-endpoint = <&decon_to_dsi>;
+					};
+				};
+			};
+		};
+
+		decon: display-controller@14860000 {
+			compatible = "samsung,exynos7885-decon";
+			reg = <0x14860000 0x10000>,
+			      <0x148B1000 0x1000>;	/* IDMA0 (DPP0/IDMA_G0) */
+			interrupt-names = "fifo", "vsync", "lcd_sys";
+			interrupts = <GIC_SPI 115 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 114 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 113 IRQ_TYPE_LEVEL_HIGH>;
+
+			clocks = <&cmu_dispaud CLK_GOUT_DISPAUD_APB_DPU>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_BUS_DPU>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_DPU_DECON0>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_MUX_PLL>;
+			clock-names = "pclk_decon0", "aclk_decon0",
+				      "decon0_eclk", "decon0_vclk";
+
+			status = "disabled";
+
+			port {
+				decon_to_dsi: endpoint {
+					remote-endpoint = <&dsi_from_decon>;
+				};
+			};
+		};
+
 		pinctrl_alive: pinctrl@11cb0000 {
 			compatible = "samsung,exynos7885-pinctrl";
 			reg = <0x11cb0000 0x1000>;
@@ -427,6 +493,12 @@
 			compatible = "samsung,exynos7885-pmu",
 				     "samsung,exynos7-pmu", "syscon";
 			reg = <0x11c80000 0x10000>;
+
+			mipi_phy: mipi-phy {
+				compatible = "samsung,exynos7885-mipi-video-phy";
+				#phy-cells = <1>;
+			};
+
 			reboot-mode {
 				compatible = "syscon-reboot-mode";
 				offset = <0x0810>;
@@ -435,6 +507,17 @@
 				mode-download = <0xfe>;
 				mode-recovery = <0xff>;
 			};
+		};
+
+		watchdog: watchdog@10060000 {
+			compatible = "samsung,exynos8-wdt";
+			reg = <0x10060000 0x100>;
+			interrupts = <GIC_SPI 233 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&cmu_peri CLK_GOUT_WDT1_PCLK>, <&oscclk>;
+			clock-names = "watchdog", "watchdog_src";
+			samsung,syscon-phandle = <&pmu_system_controller>;
+			timeout-sec = <30>;
+			status = "disabled";
 		};
 
 		mmc_0: mmc@13500000 {

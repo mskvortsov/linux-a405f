@@ -20,6 +20,9 @@
 
 struct exynos_dsi {
 	struct drm_encoder encoder;
+	bool skip_mipi_host_register;
+	bool mipi_host_registered;
+	bool skip_hotplug_event;
 };
 
 static const struct drm_encoder_funcs exynos_drm_dsi_encoder_funcs = {
@@ -42,24 +45,32 @@ static int exynos_dsi_host_attach(struct samsung_dsim *dsim,
 {
 	struct exynos_dsi *dsi = dsim->priv;
 	struct drm_encoder *encoder = &dsi->encoder;
+	struct exynos_drm_crtc *crtc;
 	struct drm_device *drm = encoder->dev;
+	int ret;
 
-	drm_bridge_attach(encoder, &dsim->bridge,
-			  list_first_entry_or_null(&encoder->bridge_chain,
-						   struct drm_bridge,
-						   chain_node), 0);
+	ret = drm_bridge_attach(encoder, &dsim->bridge,
+				list_first_entry_or_null(&encoder->bridge_chain,
+							 struct drm_bridge,
+							 chain_node), 0);
+	if (ret)
+		return ret;
 
 	mutex_lock(&drm->mode_config.mutex);
 
 	dsim->lanes = device->lanes;
 	dsim->format = device->format;
 	dsim->mode_flags = device->mode_flags;
-	exynos_drm_crtc_get_by_type(drm, EXYNOS_DISPLAY_TYPE_LCD)->i80_mode =
-			!(dsim->mode_flags & MIPI_DSI_MODE_VIDEO);
+	crtc = exynos_drm_crtc_get_by_type(drm, EXYNOS_DISPLAY_TYPE_LCD);
+	if (IS_ERR(crtc)) {
+		mutex_unlock(&drm->mode_config.mutex);
+		return PTR_ERR(crtc);
+	}
+	crtc->i80_mode = !(dsim->mode_flags & MIPI_DSI_MODE_VIDEO);
 
 	mutex_unlock(&drm->mode_config.mutex);
 
-	if (drm->mode_config.poll_enabled)
+	if (!dsi->skip_hotplug_event && drm->mode_config.poll_enabled)
 		drm_kms_helper_hotplug_event(drm);
 
 	return 0;
@@ -92,16 +103,29 @@ static int exynos_dsi_bind(struct device *dev, struct device *master, void *data
 	if (ret < 0)
 		return ret;
 
-	return mipi_dsi_host_register(&dsim->dsi_host);
+	if (dsi->skip_mipi_host_register) {
+		dev_info(dev, "probe-only mode, skipping MIPI DSI host registration\n");
+		return 0;
+	}
+
+	ret = mipi_dsi_host_register(&dsim->dsi_host);
+	if (ret)
+		return ret;
+
+	dsi->mipi_host_registered = true;
+
+	return 0;
 }
 
 static void exynos_dsi_unbind(struct device *dev, struct device *master, void *data)
 {
 	struct samsung_dsim *dsim = dev_get_drvdata(dev);
+	struct exynos_dsi *dsi = dsim->priv;
 
 	dsim->bridge.funcs->atomic_disable(&dsim->bridge, NULL);
 
-	mipi_dsi_host_unregister(&dsim->dsi_host);
+	if (dsi->mipi_host_registered)
+		mipi_dsi_host_unregister(&dsim->dsi_host);
 }
 
 static const struct component_ops exynos_dsi_component_ops = {
@@ -119,6 +143,7 @@ static int exynos_dsi_register_host(struct samsung_dsim *dsim)
 
 	dsim->priv = dsi;
 	dsim->bridge.pre_enable_prev_first = true;
+	dsi->skip_hotplug_event = true;
 
 	return component_add(dsim->dev, &exynos_dsi_component_ops);
 }
@@ -130,6 +155,28 @@ static void exynos_dsi_unregister_host(struct samsung_dsim *dsim)
 
 static const struct samsung_dsim_host_ops exynos_dsi_exynos_host_ops = {
 	.register_host = exynos_dsi_register_host,
+	.unregister_host = exynos_dsi_unregister_host,
+	.attach = exynos_dsi_host_attach,
+	.detach = exynos_dsi_host_detach,
+	.te_irq_handler = exynos_dsi_te_irq_handler,
+};
+
+static int exynos7885_dsi_register_host(struct samsung_dsim *dsim)
+{
+	struct exynos_dsi *dsi;
+
+	dsi = devm_kzalloc(dsim->dev, sizeof(*dsi), GFP_KERNEL);
+	if (!dsi)
+		return -ENOMEM;
+
+	dsim->priv = dsi;
+	dsim->bridge.pre_enable_prev_first = true;
+
+	return component_add(dsim->dev, &exynos_dsi_component_ops);
+}
+
+static const struct samsung_dsim_host_ops exynos7885_dsi_host_ops = {
+	.register_host = exynos7885_dsi_register_host,
 	.unregister_host = exynos_dsi_unregister_host,
 	.attach = exynos_dsi_host_attach,
 	.detach = exynos_dsi_host_detach,
@@ -166,6 +213,11 @@ static const struct samsung_dsim_plat_data exynos7870_dsi_pdata = {
 	.host_ops = &exynos_dsi_exynos_host_ops,
 };
 
+static const struct samsung_dsim_plat_data exynos7885_dsi_pdata = {
+	.hw_type = DSIM_TYPE_EXYNOS7885,
+	.host_ops = &exynos7885_dsi_host_ops,
+};
+
 static const struct of_device_id exynos_dsi_of_match[] = {
 	{
 		.compatible = "samsung,exynos3250-mipi-dsi",
@@ -190,6 +242,10 @@ static const struct of_device_id exynos_dsi_of_match[] = {
 	{
 		.compatible = "samsung,exynos7870-mipi-dsi",
 		.data = &exynos7870_dsi_pdata,
+	},
+	{
+		.compatible = "samsung,exynos7885-mipi-dsi",
+		.data = &exynos7885_dsi_pdata,
 	},
 	{ /* sentinel. */ }
 };

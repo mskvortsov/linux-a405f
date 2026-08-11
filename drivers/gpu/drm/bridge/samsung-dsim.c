@@ -153,8 +153,16 @@
 
 /* DSIM_SFRCTRL */
 #define DSIM_SFR_CTRL_STAND_BY		BIT(4)
-#define DSIM_SFR_CTRL_SHADOW_UPDATE	BIT(1)
+/*
+ * On the Exynos7885 DSIM bit 1 is SHADOW_REG_READ_EN (selects whether SFR
+ * reads return the shadow or the active copy), not a shadow-update trigger:
+ * shadow registers commit from the DECON frame trigger, not via an SFR bit.
+ */
+#define DSIM_SFR_CTRL_SHADOW_REG_READ_EN	BIT(1)
 #define DSIM_SFR_CTRL_SHADOW_EN		BIT(0)
+
+/* DSIM_CMD_CONFIG (0x80 on 7885) */
+#define DSIM_PKT_GO_EN			BIT(16)
 
 /* DSIM_FIFOCTRL */
 #define DSIM_RX_DATA_FULL		BIT(25)
@@ -353,6 +361,39 @@ static const unsigned int exynos7870_reg_ofs[] = {
 	[DSIM_PHYTIMING2_REG] = 0xBC,
 };
 
+/*
+ * Exynos7885 DSIM has a substantially different register layout from 7870:
+ *  - SWRST at 0x04, PLLCTRL at 0xA0, CLK_CTRL at 0x20, CONFIG at 0x4C
+ *  - PLL_STABLE is in LINK_STATUS3 (0x14) bit 0 (not LINK_STATUS bit 24)
+ *  - PHY timing registers at 0xD0-0xD8 (not 0xB4-0xBC)
+ *  - PHYCTRL_REG points at M_PLL_CTRL1 (0xA4) which takes value 0x40000000
+ */
+static const unsigned int exynos7885_reg_ofs[] = {
+	[DSIM_LINK_STATUS_REG] = 0x14,  /* LINK_STATUS3: bit 0 = PLL_STABLE */
+	[DSIM_DPHY_STATUS_REG] = 0x1C,
+	[DSIM_SWRST_REG] = 0x04,
+	[DSIM_CLKCTRL_REG] = 0x20,
+	[DSIM_TIMEOUT_REG] = 0x28,
+	[DSIM_ESCMODE_REG] = 0x2C,
+	[DSIM_MDRESOL_REG] = 0x3C,
+	[DSIM_MVPORCH_REG] = 0x40,
+	[DSIM_MHPORCH_REG] = 0x44,
+	[DSIM_MSYNC_REG] = 0x48,
+	[DSIM_CONFIG_REG] = 0x4C,
+	[DSIM_INTSRC_REG] = 0x50,
+	[DSIM_INTMSK_REG] = 0x54,
+	[DSIM_PKTHDR_REG] = 0x58,
+	[DSIM_PAYLOAD_REG] = 0x5C,
+	[DSIM_RXFIFO_REG] = 0x60,
+	[DSIM_SFRCTRL_REG] = 0x64,
+	[DSIM_FIFOCTRL_REG] = 0x68,
+	[DSIM_PLLCTRL_REG] = 0xA0,
+	[DSIM_PHYCTRL_REG] = 0xA4,  /* M_PLL_CTRL1 — written with 0x40000000 */
+	[DSIM_PHYTIMING_REG] = 0xD0,
+	[DSIM_PHYTIMING1_REG] = 0xD4,
+	[DSIM_PHYTIMING2_REG] = 0xD8,
+};
+
 enum reg_value_idx {
 	RESET_TYPE,
 	PLL_TIMER,
@@ -441,6 +482,16 @@ static const unsigned int exynos7870_reg_values[] = {
 	[PHYTIMING_HS_PREPARE] = DSIM_PHYTIMING2_HS_PREPARE(0x09),
 	[PHYTIMING_HS_ZERO] = DSIM_PHYTIMING2_HS_ZERO(0x0f),
 	[PHYTIMING_HS_TRAIL] = DSIM_PHYTIMING2_HS_TRAIL(0x0c),
+};
+
+static const unsigned int exynos7885_reg_values[] = {
+	[RESET_TYPE] = DSIM_SWRST,
+	[PLL_TIMER] = 0x15f90,  /* DSIM_PLL_STABLE_TIME from downstream */
+	[STOP_STATE_CNT] = 0xa,
+	/* PHYCTRL_REG maps to M_PLL_CTRL1 (0xA4); downstream DSIM 0 value */
+	[PHYCTRL_ULPS_EXIT] = 0x40000000,
+	[PHYCTRL_VREG_LP] = 0,
+	[PHYCTRL_SLEW_UP] = 0,
 };
 
 static const unsigned int imx8mm_dsim_reg_values[] = {
@@ -644,6 +695,42 @@ static const struct samsung_dsim_driver_data exynos7870_dsi_driver_data = {
 	.min_freq = 500,
 };
 
+static const struct samsung_dsim_driver_data exynos7885_dsi_driver_data = {
+	.reg_ofs = exynos7885_reg_ofs,
+	.plltmr_reg = 0xAC,  /* DSIM_PLLTMR at 0xAC on 7885 */
+	.has_clklane_stop = 1,
+	.has_sfrctrl = 1,
+	.has_clklane_onoff = 1,  /* CLK_CTRL bit 24 = CLKLANE_ONOFF */
+	.skip_fifoctrl_init = 1,  /* downstream comments out FIFO init on 7885 */
+	.no_main_standby = 1,  /* DSIM_RESOL/SFR_CTRL have no standby bit on 7885 */
+	/* pll_ctrl1_reg: write reg_values[PHYCTRL_ULPS_EXIT]=0x40000000 to
+	 * M_PLL_CTRL1 (0xA4) before asserting PLL_EN in PLLCTRL (0xA0) */
+	.pll_ctrl1_reg = 0xA4,
+	.pkt_go_reg = 0x80,  /* CMD_CONFIG: assert PKT_GO_EN before writing PKTHDR */
+	.clk_data = exynos7870_clk_bulk_data,
+	.num_clks = ARRAY_SIZE(exynos7870_clk_bulk_data),
+	.max_freq = 1500,
+	.wait_for_reset = 1,
+	.num_bits_resol = 12,
+	.video_mode_bit = 18,
+	.pll_stable_bit = 0,  /* LINK_STATUS3 (0x14) bit 0 = PLL_STABLE */
+	.esc_clken_bit = 16,
+	.byte_clken_bit = 17,
+	.tx_req_hsclk_bit = 20,
+	.lane_esc_clk_bit = 8,
+	.lane_esc_data_offset = 9,
+	.pll_p_offset = 13,
+	.pll_m_offset = 3,
+	.pll_s_offset = 0,
+	.main_vsa_offset = 16,
+	.reg_values = exynos7885_reg_values,
+	.pll_fin_min = 6,
+	.pll_fin_max = 12,
+	.m_min = 41,
+	.m_max = 125,
+	.min_freq = 500,
+};
+
 static const struct samsung_dsim_driver_data imx8mm_dsi_driver_data = {
 	.reg_ofs = exynos5433_reg_ofs,
 	.plltmr_reg = 0xa0,
@@ -686,6 +773,7 @@ samsung_dsim_types[DSIM_TYPE_COUNT] = {
 	[DSIM_TYPE_EXYNOS5422] = &exynos5422_dsi_driver_data,
 	[DSIM_TYPE_EXYNOS5433] = &exynos5433_dsi_driver_data,
 	[DSIM_TYPE_EXYNOS7870] = &exynos7870_dsi_driver_data,
+	[DSIM_TYPE_EXYNOS7885] = &exynos7885_dsi_driver_data,
 	[DSIM_TYPE_IMX8MM] = &imx8mm_dsi_driver_data,
 	[DSIM_TYPE_IMX8MP] = &imx8mm_dsi_driver_data,
 };
@@ -816,7 +904,18 @@ static unsigned long samsung_dsim_set_pll(struct samsung_dsim *dsi,
 			"failed to find PLL PMS for requested frequency\n");
 		return 0;
 	}
-	dev_dbg(dsi->dev, "PLL freq %lu, (p %d, m %d, s %d)\n", fout, p, m, s);
+	dev_dbg(dsi->dev, "PLL: fin=%lu target=%lu fout=%lu p=%u m=%u s=%u\n",
+		fin, freq, fout, p, m, s);
+
+	/* If PLL is already running (bootloader left it stable), skip reprogramming. */
+	if (!driver_data->has_legacy_status_reg) {
+		u32 st = samsung_dsim_read(dsi, DSIM_LINK_STATUS_REG);
+
+		if (st & BIT(driver_data->pll_stable_bit)) {
+			dsi->hs_clock = fout;
+			return fout;
+		}
+	}
 
 	writel(driver_data->reg_values[PLL_TIMER],
 	       dsi->reg_base + driver_data->plltmr_reg);
@@ -849,12 +948,21 @@ static unsigned long samsung_dsim_set_pll(struct samsung_dsim *dsi,
 	if (dsi->swap_dn_dp_data)
 		reg |= DSIM_PLL_DPDNSWAP_DAT;
 
+	/* For 7885: write M_PLL_CTRL1 before asserting PLL_EN */
+	if (driver_data->pll_ctrl1_reg)
+		writel(driver_data->reg_values[PHYCTRL_ULPS_EXIT],
+		       dsi->reg_base + driver_data->pll_ctrl1_reg);
+
 	samsung_dsim_write(dsi, DSIM_PLLCTRL_REG, reg);
 
 	timeout = 3000;
 	do {
 		if (timeout-- == 0) {
 			dev_err(dsi->dev, "PLL failed to stabilize\n");
+			dev_info(dsi->dev, "LINK_STATUS=0x%08x DPHY_STATUS=0x%08x PLLCTRL=0x%08x\n",
+				 samsung_dsim_read(dsi, DSIM_LINK_STATUS_REG),
+				 samsung_dsim_read(dsi, DSIM_DPHY_STATUS_REG),
+				 samsung_dsim_read(dsi, DSIM_PLLCTRL_REG));
 			return 0;
 		}
 		if (driver_data->has_legacy_status_reg)
@@ -868,7 +976,7 @@ static unsigned long samsung_dsim_set_pll(struct samsung_dsim *dsi,
 	return fout;
 }
 
-static int samsung_dsim_enable_clock(struct samsung_dsim *dsi)
+static int samsung_dsim_enable_clock(struct samsung_dsim *dsi, bool skip_clkctrl)
 {
 	const struct samsung_dsim_driver_data *driver_data = dsi->driver_data;
 	unsigned long hs_clk, byte_clk, esc_clk, pix_clk;
@@ -903,6 +1011,18 @@ static int samsung_dsim_enable_clock(struct samsung_dsim *dsi)
 	dev_dbg(dsi->dev, "hs_clk = %lu, byte_clk = %lu, esc_clk = %lu\n",
 		hs_clk, byte_clk, esc_clk);
 
+	if (skip_clkctrl) {
+		/*
+		 * In skip_reset path the bootloader's CLKCTRL is already correct.
+		 * Writing it here would assert CLKLANE_ONOFF (BIT(24)), forcing the
+		 * clock lane permanently into HS mode and eliminating the LP-11
+		 * blanking windows that LP escape commands require.
+		 */
+		dev_dbg(dsi->dev, "skip_clkctrl: CLKCTRL=0x%08x (preserved)\n",
+			samsung_dsim_read(dsi, DSIM_CLKCTRL_REG));
+		return 0;
+	}
+
 	reg = samsung_dsim_read(dsi, DSIM_CLKCTRL_REG);
 	reg &= ~(DSIM_ESC_PRESCALER_MASK | BIT(driver_data->lane_esc_clk_bit)
 		| DSIM_LANE_ESC_CLK_EN_DATA_MASK(driver_data->lane_esc_data_offset)
@@ -915,6 +1035,8 @@ static int samsung_dsim_enable_clock(struct samsung_dsim *dsi)
 					    driver_data->lane_esc_data_offset)
 		| DSIM_BYTE_CLK_SRC(0)
 		| BIT(driver_data->tx_req_hsclk_bit);
+	if (driver_data->has_clklane_onoff)
+		reg |= BIT(24);  /* DSIM_CLK_CTRL_CLKLANE_ONOFF on 7885 */
 	samsung_dsim_write(dsi, DSIM_CLKCTRL_REG, reg);
 
 	return 0;
@@ -1050,15 +1172,17 @@ static int samsung_dsim_init_link(struct samsung_dsim *dsi)
 	u32 lanes_mask;
 
 	/* Initialize FIFO pointers */
-	reg = samsung_dsim_read(dsi, DSIM_FIFOCTRL_REG);
-	reg &= ~0x1f;
-	samsung_dsim_write(dsi, DSIM_FIFOCTRL_REG, reg);
+	if (!driver_data->skip_fifoctrl_init) {
+		reg = samsung_dsim_read(dsi, DSIM_FIFOCTRL_REG);
+		reg &= ~0x1f;
+		samsung_dsim_write(dsi, DSIM_FIFOCTRL_REG, reg);
 
-	usleep_range(9000, 11000);
+		usleep_range(9000, 11000);
 
-	reg |= 0x1f;
-	samsung_dsim_write(dsi, DSIM_FIFOCTRL_REG, reg);
-	usleep_range(9000, 11000);
+		reg |= 0x1f;
+		samsung_dsim_write(dsi, DSIM_FIFOCTRL_REG, reg);
+		usleep_range(9000, 11000);
+	}
 
 	/* DSI configuration */
 	reg = 0;
@@ -1137,6 +1261,10 @@ static int samsung_dsim_init_link(struct samsung_dsim *dsi)
 	do {
 		if (timeout-- == 0) {
 			dev_err(dsi->dev, "waiting for bus lanes timed out\n");
+			dev_info(dsi->dev, "DPHY_STATUS=0x%08x CLKCTRL=0x%08x CONFIG=0x%08x\n",
+				 samsung_dsim_read(dsi, DSIM_DPHY_STATUS_REG),
+				 samsung_dsim_read(dsi, DSIM_CLKCTRL_REG),
+				 samsung_dsim_read(dsi, DSIM_CONFIG_REG));
 			return -EFAULT;
 		}
 
@@ -1166,6 +1294,19 @@ static void samsung_dsim_set_display_mode(struct samsung_dsim *dsi)
 	unsigned int num_bits_resol = dsi->driver_data->num_bits_resol;
 	unsigned int main_vsa_offset = dsi->driver_data->main_vsa_offset;
 	u32 reg;
+
+	/*
+	 * On the Exynos7885-style DSIM the porch/sync/resolution registers
+	 * (VPORCH/HPORCH/SYNC/RESOL) have a completely different bit layout from
+	 * the legacy MDRESOL/MVPORCH used below — e.g. VFP_CMD_ALLOW is [31:24]
+	 * here vs CMD_ALLOW [31:28] there, and VFP_TOTAL [15:8] has no legacy
+	 * equivalent.  Writing the legacy layout corrupts the live video timing
+	 * (VFP_TOTAL=0) and stalls the video FSM.  The bootloader already
+	 * programmed correct timing that the skip-reset path inherits, so leave
+	 * it untouched.
+	 */
+	if (dsi->driver_data->no_main_standby)
+		return;
 
 	if (dsi->mode_flags & MIPI_DSI_MODE_VIDEO) {
 		u64 byte_clk = dsi->hs_clock / 8;
@@ -1207,6 +1348,15 @@ static void samsung_dsim_set_display_enable(struct samsung_dsim *dsi, bool enabl
 {
 	const struct samsung_dsim_driver_data *driver_data = dsi->driver_data;
 	u32 reg;
+
+	/*
+	 * The Exynos7885-style DSIM has no MAIN_STAND_BY (MDRESOL bit 31) and
+	 * no SFR_CTRL standby bit — both offsets are reserved there.  Video
+	 * transmission is gated by CONFIG video-mode + HS clock + DECON frames,
+	 * so writing those bits would only poke reserved fields.
+	 */
+	if (driver_data->no_main_standby)
+		return;
 
 	reg = samsung_dsim_read(dsi, DSIM_MDRESOL_REG);
 	if (enable)
@@ -1333,7 +1483,23 @@ static void samsung_dsim_send_to_fifo(struct samsung_dsim *dsi,
 		dsi->state ^= DSIM_STATE_CMD_LPM;
 	}
 
-	samsung_dsim_write(dsi, DSIM_PKTHDR_REG, reg);
+	/*
+	 * On 7885 the command FIFO is drained by the "packet go" engine: assert
+	 * PKT_GO_EN to hold the packet while header (and payload above) are
+	 * loaded, then deassert it to release the batch for transmission.
+	 * Holding PKT_GO_EN permanently leaves the packet queued forever, which
+	 * is why the header FIFO count grows without ever draining.  This
+	 * mirrors the downstream dsim_write_data() enable/disable bracket.
+	 */
+	if (driver_data->pkt_go_reg) {
+		u32 cfg = readl(dsi->reg_base + driver_data->pkt_go_reg);
+
+		writel(cfg | DSIM_PKT_GO_EN, dsi->reg_base + driver_data->pkt_go_reg);
+		samsung_dsim_write(dsi, DSIM_PKTHDR_REG, reg);
+		writel(cfg & ~DSIM_PKT_GO_EN, dsi->reg_base + driver_data->pkt_go_reg);
+	} else {
+		samsung_dsim_write(dsi, DSIM_PKTHDR_REG, reg);
+	}
 
 	if (xfer->flags & MIPI_DSI_MSG_REQ_ACK)
 		samsung_dsim_force_bta(dsi);
@@ -1553,6 +1719,11 @@ static int samsung_dsim_transfer(struct samsung_dsim *dsi,
 	if (xfer->result == -ETIMEDOUT) {
 		struct mipi_dsi_packet *pkt = &xfer->packet;
 
+		dev_info(dsi->dev, "xfer timeout: INTSRC=0x%08x INTMSK=0x%08x FIFOCTRL=0x%08x ESCMODE=0x%08x\n",
+			 samsung_dsim_read(dsi, DSIM_INTSRC_REG),
+			 samsung_dsim_read(dsi, DSIM_INTMSK_REG),
+			 samsung_dsim_read(dsi, DSIM_FIFOCTRL_REG),
+			 samsung_dsim_read(dsi, DSIM_ESCMODE_REG));
 		samsung_dsim_remove_transfer(dsi, xfer);
 		dev_err(dsi->dev, "xfer timed out: %*ph %*ph\n", 4, pkt->header,
 			(int)pkt->payload_length, pkt->payload);
@@ -1586,11 +1757,13 @@ static irqreturn_t samsung_dsim_irq(int irq, void *dev_id)
 				       DSIM_INT_SW_RST_RELEASE);
 		samsung_dsim_write(dsi, DSIM_INTMSK_REG, mask);
 		complete(&dsi->completed);
-		return IRQ_HANDLED;
+		/* Fall through: SW_RST_RELEASE can fire simultaneously with a
+		 * transfer-completion bit (e.g. in skip_reset path), so check
+		 * transfer_finish even after handling the reset event. */
 	}
 
 	if (!(status & (DSIM_INT_RX_DONE | DSIM_INT_SFR_FIFO_EMPTY |
-			DSIM_INT_PLL_STABLE)))
+			DSIM_INT_SFR_HDR_FIFO_EMPTY | DSIM_INT_PLL_STABLE)))
 		return IRQ_HANDLED;
 
 	if (samsung_dsim_transfer_finish(dsi))
@@ -1618,25 +1791,89 @@ static void samsung_dsim_disable_irq(struct samsung_dsim *dsi)
 static int samsung_dsim_init(struct samsung_dsim *dsi)
 {
 	const struct samsung_dsim_driver_data *driver_data = dsi->driver_data;
+	bool skip_reset = false;
 
 	if (dsi->state & DSIM_STATE_INITIALIZED)
 		return 0;
 
-	samsung_dsim_reset(dsi);
+	/*
+	 * If the PLL is already stable (bootloader left DSIM running), skip
+	 * SW_RST to avoid disrupting the active display pipeline — DECON may
+	 * still be scanning out and will hang on AXI if DSIM resets under it.
+	 */
+	if (!driver_data->has_legacy_status_reg) {
+		u32 st = samsung_dsim_read(dsi, DSIM_LINK_STATUS_REG);
+
+		if (st & BIT(driver_data->pll_stable_bit)) {
+			dev_info(dsi->dev, "PLL already stable, skipping SWRST\n");
+			skip_reset = true;
+		}
+	}
+
+	if (!skip_reset)
+		samsung_dsim_reset(dsi);
+
+	/*
+	 * In the skip_reset path the bootloader leaves SFRCTRL SHADOW_EN=1 and
+	 * the timing registers (MVPORCH, MHPORCH, including CMD_ALLOW) live in
+	 * the shadow copy.  Clearing SHADOW_EN would switch the DSIM to the
+	 * hardware registers, which were zeroed by SW_RST and never
+	 * reprogrammed — resulting in CMD_ALLOW=0 and no LP windows.  So leave
+	 * SHADOW_EN untouched; the non-timing registers (INTMSK, ESCMODE,
+	 * PKTHDR, PAYLOAD, FIFOCTRL) are not shadowed and reach hardware
+	 * regardless.
+	 */
+
 	samsung_dsim_enable_irq(dsi);
+
+	if (skip_reset) {
+		/* No SW_RST was done so no SW_RST_RELEASE will fire.
+		 * Manually replicate what the IRQ handler does on that event. */
+		unsigned long mask = ~(DSIM_INT_RX_DONE |
+				       DSIM_INT_SFR_FIFO_EMPTY |
+				       DSIM_INT_SFR_HDR_FIFO_EMPTY |
+				       DSIM_INT_RX_ECC_ERR |
+				       DSIM_INT_SW_RST_RELEASE);
+		samsung_dsim_write(dsi, DSIM_INTMSK_REG, (u32)mask);
+		complete(&dsi->completed);
+	}
 
 	if (driver_data->reg_values[RESET_TYPE] == DSIM_FUNCRST)
 		samsung_dsim_enable_lane(dsi, BIT(dsi->lanes) - 1);
 
-	samsung_dsim_enable_clock(dsi);
+	if (samsung_dsim_enable_clock(dsi, skip_reset))
+		goto err_disable_irq;
+
+	if (skip_reset) {
+		/*
+		 * Bootloader left DSIM fully configured (PHY ctrl, link CONFIG,
+		 * video timing).  Writing CONFIG here would trigger SW_RST_RELEASE
+		 * (a link reset), after which the 7885 DSIM waits for fresh video
+		 * timing from DECON before opening LP command windows.  Since we
+		 * haven't programmed MVPORCH/MHPORCH yet, LP commands stall
+		 * forever.  Skip set_phy_ctrl() and init_link() so the bootloader's
+		 * working link state is preserved.
+		 */
+		dsi->state |= DSIM_STATE_INITIALIZED;
+		return 0;
+	}
+
 	if (driver_data->wait_for_reset)
 		samsung_dsim_wait_for_reset(dsi);
 	samsung_dsim_set_phy_ctrl(dsi);
-	samsung_dsim_init_link(dsi);
+
+	if (samsung_dsim_init_link(dsi))
+		goto err_disable_irq;
 
 	dsi->state |= DSIM_STATE_INITIALIZED;
-
 	return 0;
+
+err_disable_irq:
+	/* Mask all DSIM interrupts and disable the IRQ to stop the
+	 * SFR_FIFO_EMPTY storm that starts after SW_RST_RELEASE unmasks it. */
+	samsung_dsim_write(dsi, DSIM_INTMSK_REG, ~0U);
+	disable_irq_nosync(dsi->irq);
+	return -EFAULT;
 }
 
 static void samsung_dsim_atomic_pre_enable(struct drm_bridge *bridge,
@@ -1694,6 +1931,17 @@ static void samsung_dsim_atomic_post_disable(struct drm_bridge *bridge,
 					     struct drm_atomic_commit *state)
 {
 	struct samsung_dsim *dsi = bridge_to_dsi(bridge);
+
+	/*
+	 * Shallow DPMS on the Exynos7885-style DSIM: keep the PLL/PHY/link alive
+	 * across off/on.  A runtime suspend here tears down the PLL, and this IP
+	 * cannot re-lock it from software without a full hardware reset, so a
+	 * subsequent enable would fail.  Instead leave the link up (the panel is
+	 * blanked via a display-off DCS) and let the next enable reuse it; the
+	 * DSIM video FSM just keeps scanning.
+	 */
+	if (dsi->driver_data->no_main_standby)
+		return;
 
 	dsi->state &= ~DSIM_STATE_ENABLED;
 	pm_runtime_put_sync(dsi->dev);
@@ -1959,7 +2207,17 @@ of_find_panel_or_bridge:
 		     mipi_dsi_pixel_format_to_bpp(device->format),
 		     device->mode_flags);
 
+	if (pdata->skip_host_attach || pdata->skip_bridge_add) {
+		dev_info(dev, "probe-only mode, skipping DSIM bridge registration\n");
+		return 0;
+	}
+
 	drm_bridge_add(&dsi->bridge);
+
+	if (pdata->skip_after_bridge_add) {
+		dev_info(dev, "probe-only mode, stopping after DSIM bridge registration\n");
+		return 0;
+	}
 
 	/*
 	 * This is a temporary solution and should be made by more generic way.
@@ -1975,6 +2233,11 @@ of_find_panel_or_bridge:
 
 	// The next bridge can be used by host_ops->attach
 	dsi->bridge.next_bridge = drm_bridge_get(next_bridge);
+
+	if (pdata->skip_after_next_bridge) {
+		dev_info(dev, "probe-only mode, stopping after DSIM next bridge assignment\n");
+		return 0;
+	}
 
 	if (pdata->host_ops && pdata->host_ops->attach) {
 		ret = pdata->host_ops->attach(dsi, device);

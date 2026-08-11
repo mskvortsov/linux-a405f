@@ -30,13 +30,14 @@ enum samsung_dsim_type {
 	DSIM_TYPE_EXYNOS5422,
 	DSIM_TYPE_EXYNOS5433,
 	DSIM_TYPE_EXYNOS7870,
+	DSIM_TYPE_EXYNOS7885,
 	DSIM_TYPE_IMX8MM,
 	DSIM_TYPE_IMX8MP,
 	DSIM_TYPE_COUNT,
 };
 
 #define samsung_dsim_hw_is_exynos(hw) \
-	((hw) >= DSIM_TYPE_EXYNOS3250 && (hw) <= DSIM_TYPE_EXYNOS5433)
+	((hw) >= DSIM_TYPE_EXYNOS3250 && (hw) <= DSIM_TYPE_EXYNOS7885)
 
 struct samsung_dsim_transfer {
 	struct list_head list;
@@ -59,6 +60,20 @@ struct samsung_dsim_driver_data {
 	unsigned int has_clklane_stop:1;
 	unsigned int has_broken_fifoctrl_emptyhdr:1;
 	unsigned int has_sfrctrl:1;
+	/* Enable CLKLANE_ONOFF (bit 24 of CLK_CTRL) in enable_clock() */
+	unsigned int has_clklane_onoff:1;
+	/* Skip FIFO init in init_link() — FIFOs default to ready on this HW */
+	unsigned int skip_fifoctrl_init:1;
+	/*
+	 * This IP has no MAIN_STAND_BY (MDRESOL bit 31) nor SFR_CTRL standby
+	 * bit; video starts from CONFIG video-mode + HS clock + DECON feeding
+	 * frames.  set_display_enable() must not poke those reserved bits.
+	 */
+	unsigned int no_main_standby:1;
+	/* Write reg_values[PHYCTRL_ULPS_EXIT] to this reg offset before PLL_EN */
+	unsigned int pll_ctrl1_reg;
+	/* Assert PKT_GO_EN (BIT(16)) at this reg offset before writing PKTHDR */
+	unsigned int pkt_go_reg;
 	struct clk_bulk_data *clk_data;
 	unsigned int num_clks;
 	unsigned int min_freq;
@@ -95,6 +110,10 @@ struct samsung_dsim_host_ops {
 struct samsung_dsim_plat_data {
 	enum samsung_dsim_type hw_type;
 	const struct samsung_dsim_host_ops *host_ops;
+	bool skip_host_attach;
+	bool skip_bridge_add;
+	bool skip_after_bridge_add;
+	bool skip_after_next_bridge;
 };
 
 struct samsung_dsim {

@@ -132,19 +132,17 @@
 		};
 
 		/*
-		 * Debug only: ramoops/pstore region in free low RAM, clear of
-		 * every firmware carve-out and of the wrapper's initrd
-		 * (0x89000000) / kernel (0x90000000). S-Boot does not touch it,
-		 * so the console buffer survives a reboot and the previous (e.g.
-		 * USB-gadget-failed) boot's full dmesg can be read from
-		 * /sys/fs/pstore/ on the next boot.
+		 * Debug only: ramoops/pstore region in the gap after the ESS
+		 * carve-out (ends at 0x88000000) and before the wrapper's
+		 * initrd (0x89000000).
 		 */
-		ramoops@85000000 {
+		ramoops@88400000 {
 			compatible = "ramoops";
-			reg = <0x0 0x85000000 0x200000>;
+			reg = <0x0 0x88400000 0x200000>;
 			console-size = <0x100000>;
 			record-size = <0x40000>;
 			pmsg-size = <0x40000>;
+			ecc-size = <16>;
 		};
 	};
 
@@ -387,10 +385,50 @@
 	status = "okay";
 };
 
+&watchdog {
+	status = "okay";
+};
+
 &pinctrl_top {
 	pm_wrsti: pm-wrsti-pins {
 		samsung,pins = "gpg1-1";
 		samsung,pin-con-pdn = <EXYNOS_PIN_PDN_PREV>;
+	};
+};
+
+&decon {
+	status = "okay";
+};
+
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	status = "okay";
+
+	panel@0 {
+		compatible = "samsung,s6e8fc0-a40";
+		reg = <0>;
+
+		vdd3p0-supply = <&reg_dummy>;
+		reset-gpios = <&gpg2 0 GPIO_ACTIVE_HIGH>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi_to_panel>;
+			};
+		};
+	};
+};
+
+&{/soc@0/dsi@14870000/ports} {
+	port@1 {
+		reg = <1>;
+
+		dsi_to_panel: endpoint {
+			remote-endpoint = <&panel_in>;
+			data-lanes = <1 2 3 4>;
+		};
 	};
 };
 
