@@ -16,10 +16,11 @@
 #include "clk-exynos-arm64.h"
 
 /* NOTE: Must be equal to the last clock ID increased by one */
-#define CLKS_NR_TOP			(CLK_MOUT_SHARED1_PLL + 1)
+#define CLKS_NR_TOP			(CLK_GOUT_APM_MAILBOX_APM_AP_PCLK + 1)
 #define CLKS_NR_CORE			(CLK_GOUT_TREX_P_CORE_PCLK_P_CORE + 1)
-#define CLKS_NR_PERI			(CLK_GOUT_WDT1_PCLK + 1)
+#define CLKS_NR_PERI			(CLK_GOUT_TMU_PCLK + 1)
 #define CLKS_NR_FSYS			(CLK_FSYS_USB30DRD_REF_CLK + 1)
+#define CLKS_NR_DISPAUD			(CLK_GOUT_DISPAUD_MUX_MIPIPHY_RXCLKESC0_USER + 1)
 
 /* ---- CMU_TOP ------------------------------------------------------------- */
 
@@ -339,6 +340,17 @@ static const struct samsung_gate_clock top_gate_clks[] __initconst = {
 	     CLK_CON_GAT_GATE_CLKCMU_FSYS_USB30DRD, 21, 0, 0),
 };
 
+/*
+ * The APM (Active Power Management) block and its AP<->APM mailbox are
+ * always-on, and CMU_TOP does not expose a real gate register for the
+ * mailbox PCLK on this SoC. Model it as a 1:1 fixed factor off the
+ * oscillator so the mailbox driver can clk_prepare_enable() it.
+ */
+static const struct samsung_fixed_factor_clock top_fixed_factor_clks[] __initconst = {
+	FFACTOR(CLK_GOUT_APM_MAILBOX_APM_AP_PCLK, "gout_apm_mailbox_apm_ap_pclk",
+		"oscclk", 1, 1, 0),
+};
+
 static const struct samsung_cmu_info top_cmu_info __initconst = {
 	.pll_clks		= top_pll_clks,
 	.nr_pll_clks		= ARRAY_SIZE(top_pll_clks),
@@ -348,6 +360,8 @@ static const struct samsung_cmu_info top_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(top_div_clks),
 	.gate_clks		= top_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(top_gate_clks),
+	.fixed_factor_clks	= top_fixed_factor_clks,
+	.nr_fixed_factor_clks	= ARRAY_SIZE(top_fixed_factor_clks),
 	.nr_clk_ids		= CLKS_NR_TOP,
 	.clk_regs		= top_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(top_clk_regs),
@@ -408,6 +422,7 @@ CLK_OF_DECLARE(exynos7885_cmu_top, "samsung,exynos7885-cmu-top",
 #define CLK_CON_GAT_GOUT_PERI_SYSREG_PERI_PCLK	0x20b0
 #define CLK_CON_GAT_GOUT_PERI_WDT_CLUSTER0_PCLK	0x20b4
 #define CLK_CON_GAT_GOUT_PERI_WDT_CLUSTER1_PCLK	0x20b8
+#define CLK_CON_GAT_GOUT_PERI_TMU_PCLK		0x2010
 
 static const unsigned long peri_clk_regs[] __initconst = {
 	PLL_CON0_MUX_CLKCMU_PERI_BUS_USER,
@@ -453,6 +468,7 @@ static const unsigned long peri_clk_regs[] __initconst = {
 	CLK_CON_GAT_GOUT_PERI_SYSREG_PERI_PCLK,
 	CLK_CON_GAT_GOUT_PERI_WDT_CLUSTER0_PCLK,
 	CLK_CON_GAT_GOUT_PERI_WDT_CLUSTER1_PCLK,
+	CLK_CON_GAT_GOUT_PERI_TMU_PCLK,
 };
 
 /* List of parent clocks for Muxes in CMU_PERI */
@@ -560,6 +576,8 @@ static const struct samsung_gate_clock peri_gate_clks[] __initconst = {
 	     CLK_CON_GAT_GOUT_PERI_WDT_CLUSTER0_PCLK, 21, 0, 0),
 	GATE(CLK_GOUT_WDT1_PCLK, "gout_wdt1_pclk", "mout_peri_bus_user",
 	     CLK_CON_GAT_GOUT_PERI_WDT_CLUSTER1_PCLK, 21, 0, 0),
+	GATE(CLK_GOUT_TMU_PCLK, "gout_tmu_pclk", "mout_peri_bus_user",
+	     CLK_CON_GAT_GOUT_PERI_TMU_PCLK, 21, 0, 0),
 };
 
 static const struct samsung_cmu_info peri_cmu_info __initconst = {
@@ -807,6 +825,46 @@ static const struct samsung_cmu_info fsys_cmu_info __initconst = {
 	.clk_name		= "dout_fsys_bus",
 };
 
+/* ---- CMU_DISPAUD --------------------------------------------------------- */
+
+/*
+ * The downstream Exynos7885 clock IDs only expose the display/audio leaf
+ * gates, while the register layout is not yet known well enough for mainline.
+ * Model the display clocks as fixed factors for now so display nodes can
+ * resolve their clock dependencies without writing guessed CMU registers.
+ */
+static const struct samsung_fixed_factor_clock dispaud_fixed_factor_clks[] __initconst = {
+	FFACTOR(CLK_GOUT_DISPAUD_BUS_DPU, "gout_dispaud_bus_dpu",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_APB_DPU, "gout_dispaud_apb_dpu",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_DPU_DPP, "gout_dispaud_dpu_dpp",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_DPU_DMA, "gout_dispaud_dpu_dma",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_DPU_DECON0, "gout_dispaud_dpu_decon0",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_SMMU_DPU, "gout_dispaud_smmu_dpu",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_MUX_PLL, "gout_dispaud_mux_pll",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_MUX_BUS_USER, "gout_dispaud_mux_bus_user",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_MUX_MIPIPHY_TXBYTECLKHS_USER,
+		"gout_dispaud_mux_mipiphy_txbyteclkhs_user",
+		"oscclk", 1, 1, 0),
+	FFACTOR(CLK_GOUT_DISPAUD_MUX_MIPIPHY_RXCLKESC0_USER,
+		"gout_dispaud_mux_mipiphy_rxclkesc0_user",
+		"oscclk", 1, 1, 0),
+};
+
+static const struct samsung_cmu_info dispaud_cmu_info __initconst = {
+	.fixed_factor_clks	= dispaud_fixed_factor_clks,
+	.nr_fixed_factor_clks	= ARRAY_SIZE(dispaud_fixed_factor_clks),
+	.nr_clk_ids		= CLKS_NR_DISPAUD,
+	.clk_name		= "oscclk",
+};
+
 /* ---- platform_driver ----------------------------------------------------- */
 
 static int __init exynos7885_cmu_probe(struct platform_device *pdev)
@@ -827,6 +885,9 @@ static const struct of_device_id exynos7885_cmu_of_match[] = {
 	}, {
 		.compatible = "samsung,exynos7885-cmu-fsys",
 		.data = &fsys_cmu_info,
+	}, {
+		.compatible = "samsung,exynos7885-cmu-dispaud",
+		.data = &dispaud_cmu_info,
 	}, {
 	},
 };
