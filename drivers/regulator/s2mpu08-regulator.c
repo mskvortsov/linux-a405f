@@ -86,8 +86,8 @@ static int s2mpu08_regulator_set_mode(struct regulator_dev *rdev, unsigned int m
 	int rdev_id = rdev_get_id(rdev);
 	val = mode << S2MPU08_ENABLE_SHIFT;
 	ret = regmap_update_bits(rdev->regmap, rdev->desc->enable_reg,
-				val,
-				rdev->desc->enable_mask);
+				rdev->desc->enable_mask,
+				val);
 	if (ret)
 		return ret;
 	s2mpu08->opmode[rdev_id] = val;
@@ -149,13 +149,21 @@ static int s2mpu08_regulator_enable(struct regulator_dev *rdev)
 			(rdev_id == S2MPU08_LDO35 || rdev_id == S2MPU08_LDO36))
 				goto ldo35_36_workaround;
 
-	/* disregard BUCK5 enable */
-	if (rdev_id == S2MPU08_BUCK5)
+	/*
+	 * The BUCKs are SoC DVFS rails owned by ACPM. On mainline there is no
+	 * DVFS framework to coordinate with, and the live rails sit in a
+	 * different on-mode than the driver's default opmode (e.g. vdd_mif is
+	 * in mode 0b01 while enable would write 0b11) - so issuing the enable
+	 * flips a live rail's control mode and browns it out (hard hang).
+	 * Leave every BUCK to ACPM/the bootloader by making enable a no-op
+	 * (the downstream already does this for BUCK5 alone).
+	 */
+	if (rdev_id >= S2MPU08_BUCK1)
 		return 0;
 
 	return regmap_update_bits(rdev->regmap, rdev->desc->enable_reg,
-				  s2mpu08->opmode[rdev_id],
-				  rdev->desc->enable_mask);
+				  rdev->desc->enable_mask,
+				  s2mpu08->opmode[rdev_id]);
 
 ldo35_36_workaround:
 
@@ -164,8 +172,8 @@ ldo35_36_workaround:
 
 		/* if LDO36 is on */
 		if ((val & 0xC0) != 0x00) {
-			regmap_update_bits(rdev->regmap, 0x75, 0x00, 0xF0);
-			regmap_update_bits(rdev->regmap, 0xFF, 0x00, 0x08);
+			regmap_update_bits(rdev->regmap, 0x75, 0xF0, 0x00);
+			regmap_update_bits(rdev->regmap, 0xFF, 0x08, 0x00);
 			return 0;
 		}
 
@@ -182,18 +190,18 @@ ldo35_36_workaround:
 
 		/* if LDO35 is on */
 		if ((val & 0x08) == 0x08) {
-			regmap_update_bits(rdev->regmap, 0x75, 0x00, 0xF0);
+			regmap_update_bits(rdev->regmap, 0x75, 0xF0, 0x00);
 			regmap_update_bits(rdev->regmap, rdev->desc->enable_reg,
-				0xC0, rdev->desc->enable_mask);
+				rdev->desc->enable_mask, 0xC0);
 			/* LDO35 should be off when LDO36 is on */
-			regmap_update_bits(rdev->regmap, 0xFF, 0x00, 0x08);
+			regmap_update_bits(rdev->regmap, 0xFF, 0x08, 0x00);
 			return 0;
 		}
 
 		else {
 			regmap_update_bits(rdev->regmap, 0x75, 0xF0, 0xF0);
 			regmap_update_bits(rdev->regmap, rdev->desc->enable_reg,
-				0xC0, rdev->desc->enable_mask);
+				rdev->desc->enable_mask, 0xC0);
 			return 0;
 		}
 	}
@@ -203,7 +211,9 @@ static int s2mpu08_regulator_disable(struct regulator_dev *rdev) {
 	struct s2mpu08_info *s2mpu08 = rdev_get_drvdata(rdev);
 	int val;
 	int rdev_id = rdev_get_id(rdev);
-	if (rdev_id == S2MPU08_BUCK5)
+
+	/* The BUCKs belong to ACPM; see s2mpu08_regulator_enable(). */
+	if (rdev_id >= S2MPU08_BUCK1)
 		return 0;
 
 	if (s2mpu08->iodev->pmic_rev == 0x0 &&
@@ -216,7 +226,7 @@ static int s2mpu08_regulator_disable(struct regulator_dev *rdev) {
 		val = 0;
 
 	return regmap_update_bits(rdev->regmap, rdev->desc->enable_reg,
-				  val, rdev->desc->enable_mask);
+				  rdev->desc->enable_mask, val);
 
 ldo35_36_workaround:
 
@@ -226,13 +236,13 @@ ldo35_36_workaround:
 		/* if LDO36 is on */
 		if ((val & 0xC0) != 0x00) {
 			regmap_update_bits(rdev->regmap, 0x75, 0xF0, 0xF0);
-			regmap_update_bits(rdev->regmap, 0xFF, 0x00, 0x08);
+			regmap_update_bits(rdev->regmap, 0xFF, 0x08, 0x00);
 			return 0;
 		}
 
 		else {
-			regmap_update_bits(rdev->regmap, 0x75, 0x00, 0xF0);
-			regmap_update_bits(rdev->regmap, 0xFF, 0x00, 0x08);
+			regmap_update_bits(rdev->regmap, 0x75, 0xF0, 0x00);
+			regmap_update_bits(rdev->regmap, 0xFF, 0x08, 0x00);
 			return 0;
 		}
 	}
@@ -245,14 +255,14 @@ ldo35_36_workaround:
 		if ((val & 0xF0) == 0x00) {
 			regmap_update_bits(rdev->regmap, 0xFF, 0x08, 0x08);
 			regmap_update_bits(rdev->regmap, rdev->desc->enable_reg,
-				0, rdev->desc->enable_mask);
+				rdev->desc->enable_mask, 0);
 			regmap_update_bits(rdev->regmap, 0x75, 0xF0, 0xF0);
 			return 0;
 		}
 		else {
-			regmap_update_bits(rdev->regmap, 0xFF, 0x00, 0x08);
+			regmap_update_bits(rdev->regmap, 0xFF, 0x08, 0x00);
 			regmap_update_bits(rdev->regmap, rdev->desc->enable_reg,
-				0x00, rdev->desc->enable_mask);
+				rdev->desc->enable_mask, 0x00);
 			return 0;
 		}
 	}
@@ -260,19 +270,6 @@ ldo35_36_workaround:
 
 static int s2mpu08_dummy_operation(struct regulator_dev *rdev) {
 	return 0;
-}
-
-static unsigned int s2mpu08_of_map_mode(unsigned int val) {
-	switch(val) {
-	case SEC_OPMODE_SUSPEND:
-		return 0x3;
-	case SEC_OPMODE_LOWPOWER:
-		return 0x2;
-	case SEC_OPMODE_ON:
-		return 0x1;
-	default:
-		return 0x1;
-	}
 }
 
 static const struct regulator_ops s2mpu08_ldo_ops = {
@@ -363,6 +360,28 @@ static const struct regulator_ops s2mpu08_buck5_ops = {
 	.enable_time	= S2MPU08_ENABLE_TIME_LDO	\
 }
 
+/*
+ * LDO33-37 are not contiguous with LDO3-14 in the register map (L33CTRL
+ * starts at 0x4D, after a gap), so they need their own L33CTRL base
+ * instead of the L3CTRL + num - 3 formula above.
+ */
+#define regulator_desc_s2mpu08_ldo_h(num, min, step) {	\
+	.name		= "LDO"#num,			\
+	.id		= S2MPU08_LDO##num,		\
+	.ops		= &s2mpu08_ldo_ops,		\
+	.type		= REGULATOR_VOLTAGE,		\
+	.owner		= THIS_MODULE,			\
+	.min_uV		= min,				\
+	.uV_step	= step,				\
+	.n_voltages	= S2MPU08_LDO_N_VOLTAGES,	\
+	.ramp_delay	= RAMP_DELAY_12_MVUS,		\
+	.vsel_reg	= S2MPU08_REG_L33CTRL + num - 33, \
+	.vsel_mask	= S2MPU08_LDO_VSEL_MASK,	\
+	.enable_reg	= S2MPU08_REG_L33CTRL + num - 33, \
+	.enable_mask	= S2MPU08_ENABLE_MASK,		\
+	.enable_time	= S2MPU08_ENABLE_TIME_LDO	\
+}
+
 #define regulator_desc_s2mpu08_buck12346(num) {			\
 	.name		= "BUCK"#num,				\
 	.id		= S2MPU08_BUCK##num,			\
@@ -407,9 +426,9 @@ static const struct regulator_ops s2mpu08_buck5_ops = {
 	.uV_step	= S2MPU08_BUCK_STEP2,			\
 	.n_voltages	= S2MPU08_BUCK_N_VOLTAGES,		\
 	.ramp_delay	= RAMP_DELAY_12_MVUS,			\
-	.vsel_reg	= S2MPU08_REG_B7CTRL2 + (num - 1) * 3,	\
+	.vsel_reg	= S2MPU08_REG_B7CTRL2 + (num - 7) * 3,	\
 	.vsel_mask	= S2MPU08_BUCK_VSEL_MASK,		\
-	.enable_reg	= S2MPU08_REG_B7CTRL1 + (num - 1) * 3,	\
+	.enable_reg	= S2MPU08_REG_B7CTRL1 + (num - 7) * 3,	\
 	.enable_mask	= S2MPU08_ENABLE_MASK,			\
 	.enable_time	= S2MPU08_ENABLE_TIME_BUCK##num		\
 }
@@ -429,11 +448,11 @@ static const struct regulator_desc s2mpu08_regulators[] = {
 	regulator_desc_s2mpu08_ldo(12, MIN_800_MV,  S2MPU08_LDO_STEP1),
 	regulator_desc_s2mpu08_ldo(13, MIN_800_MV,  S2MPU08_LDO_STEP2),
 	regulator_desc_s2mpu08_ldo(14, MIN_1800_MV, S2MPU08_LDO_STEP2),
-	regulator_desc_s2mpu08_ldo(33, MIN_800_MV,  S2MPU08_LDO_STEP2),
-	regulator_desc_s2mpu08_ldo(34, MIN_1800_MV, S2MPU08_LDO_STEP2),
-	regulator_desc_s2mpu08_ldo(35, MIN_1800_MV, S2MPU08_LDO_STEP2),
-	regulator_desc_s2mpu08_ldo(36, MIN_800_MV,  S2MPU08_LDO_STEP2),
-	regulator_desc_s2mpu08_ldo(37, MIN_1800_MV, S2MPU08_LDO_STEP2),
+	regulator_desc_s2mpu08_ldo_h(33, MIN_800_MV,  S2MPU08_LDO_STEP2),
+	regulator_desc_s2mpu08_ldo_h(34, MIN_1800_MV, S2MPU08_LDO_STEP2),
+	regulator_desc_s2mpu08_ldo_h(35, MIN_1800_MV, S2MPU08_LDO_STEP2),
+	regulator_desc_s2mpu08_ldo_h(36, MIN_800_MV,  S2MPU08_LDO_STEP2),
+	regulator_desc_s2mpu08_ldo_h(37, MIN_1800_MV, S2MPU08_LDO_STEP2),
 	regulator_desc_s2mpu08_buck12346(1),
 	regulator_desc_s2mpu08_buck12346(2),
 	regulator_desc_s2mpu08_buck12346(3),
@@ -449,12 +468,17 @@ static int s2mpu08_pmic_dt_parse(struct platform_device *pdev,
 		unsigned int rdev_num)
 {
 	struct device_node *reg_np;
+	unsigned int i;
 
 	reg_np = of_get_child_by_name(pdev->dev.parent->of_node, "regulators");
 	if (!reg_np) {
 		dev_err(&pdev->dev, "could not find regulators sub-node\n");
 		return -EINVAL;
 	}
+
+	/* of_regulator_match() matches the DT nodes against rdata[].name. */
+	for (i = 0; i < rdev_num; i++)
+		rdata[i].name = s2mpu08_regulators[i].name;
 
 	of_regulator_match(&pdev->dev, reg_np, rdata, rdev_num);
 
@@ -463,16 +487,48 @@ static int s2mpu08_pmic_dt_parse(struct platform_device *pdev,
 	return 0;
 }
 
+/*
+ * The S2MPU08 registers are reached over ACPM. Bridge regmap to the ACPM
+ * register helpers so the regulator core can use the standard regmap ops.
+ * The context is the PMIC sub-block handle (iodev->pmic).
+ */
+static int s2mpu08_acpm_regmap_read(void *context, unsigned int reg,
+				    unsigned int *val)
+{
+	u8 v;
+	int ret;
+
+	ret = s2mpu08_read_reg(context, reg, &v);
+	if (ret)
+		return ret;
+
+	*val = v;
+	return 0;
+}
+
+static int s2mpu08_acpm_regmap_write(void *context, unsigned int reg,
+				     unsigned int val)
+{
+	return s2mpu08_write_reg(context, reg, val);
+}
+
+static const struct regmap_config s2mpu08_regmap_config = {
+	.name = "s2mpu08",
+	.reg_bits = 8,
+	.val_bits = 8,
+	.max_register = 0xff,
+	.reg_read = s2mpu08_acpm_regmap_read,
+	.reg_write = s2mpu08_acpm_regmap_write,
+};
+
 static int s2mpu08_pmic_probe(struct platform_device *pdev)
 {
 	struct s2mpu08_dev *iodev = dev_get_drvdata(pdev->dev.parent);
-	struct s2mpu08_platform_data *pdata = iodev->pdata;
 	struct of_regulator_match *rdata = NULL;
 	struct regulator_config config = { };
 	struct s2mpu08_info *s2mpu08;
 	unsigned int rdev_num = 0;
 	int i, ret = 0;
-	const struct regulator_desc *regulators;
 
 	s2mpu08 = devm_kzalloc(&pdev->dev, sizeof(struct s2mpu08_info),
 				GFP_KERNEL);
@@ -486,8 +542,12 @@ static int s2mpu08_pmic_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, s2mpu08);
 
+	config.regmap = devm_regmap_init(&pdev->dev, NULL, iodev->pmic,
+					 &s2mpu08_regmap_config);
+	if (IS_ERR(config.regmap))
+		return PTR_ERR(config.regmap);
+
 	rdev_num = ARRAY_SIZE(s2mpu08_regulators);
-	//regulators = s2mpu08_regulators;
 
 	rdata = kcalloc(rdev_num, sizeof(*rdata), GFP_KERNEL);
 	if (!rdata)
@@ -513,19 +573,27 @@ static int s2mpu08_pmic_probe(struct platform_device *pdev)
 		}
 	}
 
-	regmap_update_bits(config.regmap, S2MPU08_REG_RTCBUF, 0x2, 0x2);
+	/*
+	 * Downstream also sets RTCBUF bit 1 and rewrites the SELMIF routing
+	 * (SEL_CTRL1 = 0x7E, SEL_CTRL2[6:0] = 0: LDO2,4-8,33-35 follow
+	 * PWREN_MIF, LDO1,10-14 follow PWREN). Those only matter for
+	 * sleep-mode rail control, which mainline does not use yet, so leave
+	 * whatever the bootloader programmed and just report it.
+	 */
+	{
+		unsigned int sel1 = 0, sel2 = 0;
 
-	/* SELMIF settings */
-	/* LDO2,4,7,5,6,7,8,33,34,35 - controlled by PWREN_MIF */
-	/* LDO1,10,11,12,13,14 - controlled by PWREN */
-	regmap_write(config.regmap, S2MPU08_REG_SEL_CTRL1, 0x7E);
-	regmap_update_bits(config.regmap, S2MPU08_REG_SEL_CTRL2, 0x00, 0x7F);
+		regmap_read(config.regmap, S2MPU08_REG_SEL_CTRL1, &sel1);
+		regmap_read(config.regmap, S2MPU08_REG_SEL_CTRL2, &sel2);
+		dev_info(&pdev->dev, "SEL_CTRL1 0x%02x SEL_CTRL2 0x%02x\n",
+			 sel1, sel2);
+	}
 
 	/* initialize LDO35,36 for revision 0 (pmic_rev is read by the MFD) */
 	if (iodev->pmic_rev == 0x00) {
 		regmap_update_bits(config.regmap, 0x75, 0xF0, 0xF0);
 		regmap_update_bits(config.regmap, 0x7C, 0x08, 0x08);
-		regmap_update_bits(config.regmap, 0x8B, 0x00, 0x60);
+		regmap_update_bits(config.regmap, 0x8B, 0x60, 0x00);
 	}
 
 	/* changed water out THD in codec side */
@@ -545,14 +613,6 @@ out:
 	return ret;
 }
 
-static void s2mpu08_pmic_remove(struct platform_device *pdev)
-{
-	struct s2mpu08_info *s2mpu08 = platform_get_drvdata(pdev);
-	int i;
-	for (i = 0; i < S2MPU08_REGULATOR_MAX; i++)
-		regulator_unregister(s2mpu08->rdev[i]);
-}
-
 static const struct platform_device_id s2mpu08_pmic_id[] = {
 	{ "s2mpu08-regulator", S2MPU08X},
 	{ },
@@ -566,7 +626,6 @@ static struct platform_driver s2mpu08_pmic_driver = {
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = s2mpu08_pmic_probe,
-	.remove = s2mpu08_pmic_remove,
 	.id_table = s2mpu08_pmic_id,
 };
 
