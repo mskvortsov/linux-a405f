@@ -144,6 +144,18 @@
 		regulator-name = "dummy_reg";
 	};
 
+	/*
+	 * Cell parameters from the downstream battery_data_a40_common.dtsi:
+	 * 3100 mAh pack, 4.35 V float (battery,chg_float_voltage). Consumed by
+	 * the S2MU106 fuel gauge via monitored-battery.
+	 */
+	battery: battery {
+		compatible = "simple-battery";
+		charge-full-design-microamp-hours = <3100000>;
+		voltage-max-design-microvolt = <4350000>;
+		voltage-min-design-microvolt = <3400000>;
+	};
+
 	tsp_avdd: tsp-avdd {
 		compatible = "regulator-fixed";
 		regulator-name = "tsp_avdd";
@@ -189,6 +201,33 @@
 		enable-active-high;
 //		regulator-boot-on;
 	};*/
+};
+
+/*
+ * S2MU106 PMIC fuel gauge. Downstream puts it on i2c_0 (the s3c2440 I2C
+ * controller at 0x13830000); its alert line is on gpa2-4. The charger,
+ * MUIC and USB-PD blocks of the same PMIC are not wired up here.
+ */
+&i2c_0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	samsung,i2c-sda-delay = <100>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	status = "okay";
+
+	fuel-gauge@3b {
+		compatible = "samsung,s2mu106-fuel-gauge";
+		reg = <0x3b>;
+
+		interrupt-parent = <&gpa2>;
+		interrupts = <4 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&fuel_irq>;
+
+		monitored-battery = <&battery>;
+	};
 };
 
 &i2c_4 {
@@ -279,6 +318,14 @@
 
 	pmic_irq: pmic-irq-pins {
 		samsung,pins = "gpa2-0";
+		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/* S2MU106 fuel gauge alert (downstream pulls this up). */
+	fuel_irq: fuel-irq-pins {
+		samsung,pins = "gpa2-4";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
 		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
 		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
 	};

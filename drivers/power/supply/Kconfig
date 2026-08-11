@@ -240,6 +240,18 @@ config BATTERY_S2MU005
 
 	  This driver, if built as a module, will be called s2mu005-fuel-gauge.
 
+config BATTERY_S2MU106
+	tristate "Samsung S2MU106 PMIC fuel gauge driver"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Say Y to enable support for the Samsung S2MU106 PMIC integrated
+	  fuel gauge, which works independently of the PMIC battery charger
+	  counterpart, and reports battery metrics. The S2MU106 is used on
+	  Exynos 7904 devices such as the Galaxy A30 and A40.
+
+	  This driver, if built as a module, will be called s2mu106-battery.
+
 config BATTERY_COLLIE
 	tristate "Sharp SL-5500 (collie) battery"
 	depends on SA1100_COLLIE && MCP_UCB1200
