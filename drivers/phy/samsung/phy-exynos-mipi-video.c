@@ -262,6 +262,28 @@ static const struct mipi_phy_device_desc exynos7870_mipi_phy = {
 	},
 };
 
+#define EXYNOS7885_MIPI_PHY_CONTROL0	0x0678
+
+static const struct mipi_phy_device_desc exynos7885_mipi_phy = {
+	.num_regmaps = 1,
+	.regmap_names = {
+		"samsung,pmu-syscon",
+	},
+	.num_phys = 2,
+	.phys = {
+		{
+			/* EXYNOS_MIPI_PHY_ID_CSIS0 */
+			.coupled_phy_id = EXYNOS_MIPI_PHY_ID_NONE,
+		}, {
+			/* EXYNOS_MIPI_PHY_ID_DSIM0 */
+			.coupled_phy_id = EXYNOS_MIPI_PHY_ID_NONE,
+			.enable_val = EXYNOS4_PHY_ENABLE,
+			.enable_reg = EXYNOS7885_MIPI_PHY_CONTROL0,
+			.enable_map = EXYNOS_MIPI_REGMAP_PMU,
+		},
+	},
+};
+
 struct exynos_mipi_video_phy {
 	struct regmap *regmaps[EXYNOS_MIPI_REGMAPS_NUM];
 	int num_phys;
@@ -287,12 +309,14 @@ static int __set_phy_state(const struct exynos_mipi_phy_desc *data,
 		regmap_update_bits(enable_map, data->enable_reg,
 				   data->enable_val, 0);
 	/* PHY reset */
-	if (on)
-		regmap_update_bits(resetn_map, data->resetn_reg,
-				   data->resetn_val, data->resetn_val);
-	else
-		regmap_update_bits(resetn_map, data->resetn_reg,
-				   data->resetn_val, 0);
+	if (data->resetn_val) {
+		if (on)
+			regmap_update_bits(resetn_map, data->resetn_reg,
+					   data->resetn_val, data->resetn_val);
+		else
+			regmap_update_bits(resetn_map, data->resetn_reg,
+					   data->resetn_val, 0);
+	}
 	/* enable in PMU sysreg */
 	if (on)
 		regmap_update_bits(enable_map, data->enable_reg,
@@ -403,6 +427,9 @@ static const struct of_device_id exynos_mipi_video_phy_of_match[] = {
 	}, {
 		.compatible = "samsung,exynos7870-mipi-video-phy",
 		.data = &exynos7870_mipi_phy,
+	}, {
+		.compatible = "samsung,exynos7885-mipi-video-phy",
+		.data = &exynos7885_mipi_phy,
 	},
 	{ /* sentinel */ },
 };

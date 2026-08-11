@@ -30,6 +30,7 @@ properties:
       - samsung,exynos5420-mipi-video-phy
       - samsung,exynos5433-mipi-video-phy
       - samsung,exynos7870-mipi-video-phy
+      - samsung,exynos7885-mipi-video-phy
 
   "#phy-cells":
     const: 1
@@ -104,7 +105,8 @@ allOf:
       properties:
         compatible:
           contains:
-            const: samsung,exynos7870-mipi-video-phy
+            enum:
+              - samsung,exynos7870-mipi-video-phy
     then:
       properties:
         syscon: false
