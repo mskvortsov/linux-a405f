@@ -23,8 +23,11 @@
 /* Slave addr = 0xCC */
 /* PMIC Registers */
 enum S2MPU08_reg {
-	S2MPU08_REG_ID,
-	S2MPU08_REG_INT1,
+	/*
+	 * The PMIC block's map starts with INT1 at 0x00; the chip ID lives
+	 * at 0x00 of the TOP block (S2MPU08_PMIC_REG_PMICID), not here.
+	 */
+	S2MPU08_REG_INT1 = 0x00,
 	S2MPU08_REG_INT2,
 	S2MPU08_REG_INT3,
 	S2MPU08_REG_INT1M,

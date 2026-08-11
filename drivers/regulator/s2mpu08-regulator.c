@@ -521,9 +521,8 @@ static int s2mpu08_pmic_probe(struct platform_device *pdev)
 	regmap_write(config.regmap, S2MPU08_REG_SEL_CTRL1, 0x7E);
 	regmap_update_bits(config.regmap, S2MPU08_REG_SEL_CTRL2, 0x00, 0x7F);
 
-	/* initialize LDO35,36 for revision 0*/
-	regmap_read(config.regmap, S2MPU08_PMIC_REG_PMICID, &iodev->pmic_rev);
-	if(iodev->pmic_rev == 0x00) {
+	/* initialize LDO35,36 for revision 0 (pmic_rev is read by the MFD) */
+	if (iodev->pmic_rev == 0x00) {
 		regmap_update_bits(config.regmap, 0x75, 0xF0, 0xF0);
 		regmap_update_bits(config.regmap, 0x7C, 0x08, 0x08);
 		regmap_update_bits(config.regmap, 0x8B, 0x00, 0x60);

@@ -175,7 +175,7 @@ static void s2mpu08_irq_sync_unlock(struct irq_data *data)
 	mutex_unlock(&s2mpu08->irqlock);
 }
 
-static const inline struct regmap_irq *
+static inline const struct regmap_irq *
 irq_to_s2mpu08_irq(struct s2mpu08_dev *s2mpu08, int irq)
 {
 	return &s2mpu08_irqs[irq - s2mpu08->irq_base];

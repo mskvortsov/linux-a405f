@@ -30,13 +30,13 @@
 #include <linux/mfd/core.h>
 #include <linux/mfd/samsung/s2mpu08.h>
 #include <linux/mutex.h>
+#include <linux/platform_device.h>
 #include <linux/regulator/machine.h>
 #include <linux/rtc.h>
 #include <linux/slab.h>
 
 #ifdef CONFIG_OF
 #include <linux/of_device.h>
-#include <linux/of_gpio.h>
 #endif /* CONFIG_OF */
 
 #define I2C_ADDR_TOP	0x00
@@ -96,7 +96,7 @@ int s2mpu08_read_codec_reg(struct i2c_client *i2c, u8 reg, u8 *dest)
 int s2mpu08_read_reg(struct i2c_client *i2c, u8 reg, u8 *dest)
 {
 	struct s2mpu08_dev *s2mpu08 = i2c_get_clientdata(i2c);
-	struct acpm_pmic_ops ops = s2mpu08->acpm->ops.pmic_ops;
+	struct acpm_pmic_ops ops = s2mpu08->acpm->ops->pmic;
 	int ret;
 
 	ret = ops.read_reg(s2mpu08->acpm, s2mpu08->acpm_channel_id,
@@ -112,7 +112,7 @@ int s2mpu08_read_reg(struct i2c_client *i2c, u8 reg, u8 *dest)
 int s2mpu08_bulk_read(struct i2c_client *i2c, u8 reg, int count, u8 *buf)
 {
 	struct s2mpu08_dev *s2mpu08 = i2c_get_clientdata(i2c);
-	struct acpm_pmic_ops ops = s2mpu08->acpm->ops.pmic_ops;
+	struct acpm_pmic_ops ops = s2mpu08->acpm->ops->pmic;
 	int ret;
 
 	ret = ops.bulk_read(s2mpu08->acpm, s2mpu08->acpm_channel_id,
@@ -129,7 +129,7 @@ int s2mpu08_bulk_read(struct i2c_client *i2c, u8 reg, int count, u8 *buf)
 int s2mpu08_write_reg(struct i2c_client *i2c, u8 reg, u8 value)
 {
 	struct s2mpu08_dev *s2mpu08 = i2c_get_clientdata(i2c);
-	struct acpm_pmic_ops ops = s2mpu08->acpm->ops.pmic_ops;
+	struct acpm_pmic_ops ops = s2mpu08->acpm->ops->pmic;
 	int ret;
 
 	ret = ops.write_reg(s2mpu08->acpm, s2mpu08->acpm_channel_id,
@@ -146,7 +146,7 @@ int s2mpu08_write_reg(struct i2c_client *i2c, u8 reg, u8 value)
 int s2mpu08_bulk_write(struct i2c_client *i2c, u8 reg, int count, u8 *buf)
 {
 	struct s2mpu08_dev *s2mpu08 = i2c_get_clientdata(i2c);
-	struct acpm_pmic_ops ops = s2mpu08->acpm->ops.pmic_ops;
+	struct acpm_pmic_ops ops = s2mpu08->acpm->ops->pmic;
 	int ret;
 
 	ret = ops.bulk_write(s2mpu08->acpm, s2mpu08->acpm_channel_id,
@@ -163,7 +163,7 @@ int s2mpu08_bulk_write(struct i2c_client *i2c, u8 reg, int count, u8 *buf)
 int s2mpu08_update_reg(struct i2c_client *i2c, u8 reg, u8 val, u8 mask)
 {
 	struct s2mpu08_dev *s2mpu08 = i2c_get_clientdata(i2c);
-	struct acpm_pmic_ops ops = s2mpu08->acpm->ops.pmic_ops;
+	struct acpm_pmic_ops ops = s2mpu08->acpm->ops->pmic;
 	int ret;
 
 	ret = ops.update_reg(s2mpu08->acpm, s2mpu08->acpm_channel_id,
@@ -285,6 +285,9 @@ int s2mpu08_update_reg(struct i2c_client *i2c, u8 reg, u8 val, u8 mask)
 
 #endif
 
+EXPORT_SYMBOL_GPL(s2mpu08_read_reg);
+EXPORT_SYMBOL_GPL(s2mpu08_write_reg);
+
 #if defined(CONFIG_OF)
 static int of_s2mpu08_dt(struct device *dev,
 			 struct s2mpu08_platform_data *pdata,
@@ -293,7 +296,7 @@ static int of_s2mpu08_dt(struct device *dev,
 	struct device_node *np = dev->of_node;
 //	struct device_node *codec_np;
 //	struct i2c_client *i2c_codec;
-	int ret, strlen;
+	int strlen;
 	const char *status;
 //	u32 val;
 
@@ -302,7 +305,12 @@ static int of_s2mpu08_dt(struct device *dev,
 
 	acpm_mfd_node = np;
 
-	pdata->irq_gpio = of_get_named_gpio(np, "s2mpu08,irq-gpio", 0);
+	/*
+	 * of_get_named_gpio() and <linux/of_gpio.h> were removed upstream.
+	 * pdata->irq_gpio was only legacy bookkeeping (never used to obtain
+	 * the interrupt, which comes from the I2C client - i2c->irq), so it
+	 * is left at its devm_kzalloc() default of 0 on mainline.
+	 */
 
 	status = of_get_property(np, "s2mpu08,wakeup", &strlen);
 	if (status == NULL)
@@ -461,155 +469,126 @@ static const struct acpm_ops s2mpu08_acpm_ops = {
 };
 */
 
-static int s2mpu08_i2c_probe(struct i2c_client *i2c)
+/*
+ * The S2MPU08 is reached over ACPM, not a real I2C/SPEEDY bus. The
+ * s2mpu08_{read,write,update}_reg() helpers only use the i2c_client as a
+ * carrier for the sub-block address (i2c->addr) and a back-pointer to the
+ * s2mpu08_dev (i2c_get_clientdata()). Allocate a bare client - never
+ * registered on any bus - to play that role for each sub-block.
+ */
+static struct i2c_client *s2mpu08_reg_handle(struct device *dev,
+					     struct s2mpu08_dev *s2mpu08,
+					     u8 addr)
 {
+	struct i2c_client *c;
+
+	c = devm_kzalloc(dev, sizeof(*c), GFP_KERNEL);
+	if (!c)
+		return NULL;
+
+	c->addr = addr;
+	c->dev.parent = dev;
+	i2c_set_clientdata(c, s2mpu08);
+
+	return c;
+}
+
+static int s2mpu08_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
 	struct s2mpu08_dev *s2mpu08;
-	struct s2mpu08_platform_data *pdata = i2c->dev.platform_data;
-	struct sec_acpm_shared_bus_context *shared_ctx;
-	const struct acpm_handle *acpm;
-
+	struct s2mpu08_platform_data *pdata;
+	struct acpm_handle *acpm;
+	struct i2c_client *top;
 	u8 reg_data;
-	int ret = 0;
+	int ret;
 
-	pr_err("%s:%s\n", MFD_DEV_NAME, __func__);
-
-	s2mpu08 = kzalloc(sizeof(struct s2mpu08_dev), GFP_KERNEL);
-	if (!s2mpu08) {
-		dev_err(&i2c->dev, "%s: Failed to alloc mem for s2mpu08\n",
-								 __func__);
+	s2mpu08 = devm_kzalloc(dev, sizeof(*s2mpu08), GFP_KERNEL);
+	if (!s2mpu08)
 		return -ENOMEM;
-	}
 
-	if (i2c->dev.of_node) {
-		pdata = devm_kzalloc(&i2c->dev,
-			 sizeof(struct s2mpu08_platform_data), GFP_KERNEL);
-		if (!pdata) {
-			dev_err(&i2c->dev, "Failed to allocate memory\n");
-			ret = -ENOMEM;
-			goto err;
-		}
+	pdata = devm_kzalloc(dev, sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		return -ENOMEM;
 
-		ret = of_s2mpu08_dt(&i2c->dev, pdata, s2mpu08);
-		if (ret < 0) {
-			dev_err(&i2c->dev, "Failed to get device of_node\n");
-			goto err;
-		}
+	ret = of_s2mpu08_dt(dev, pdata, s2mpu08);
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed to parse device tree\n");
 
-		i2c->dev.platform_data = pdata;
-	} else
-		pdata = i2c->dev.platform_data;
-	pr_err("ONEONEONE");
-
-	acpm = devm_acpm_get_by_node(&i2c->dev, acpm_mfd_node);
+	/* The ACPM handle comes from the parent &acpm_ipc node. */
+	acpm = devm_acpm_get_by_node(dev, dev->of_node->parent);
 	if (IS_ERR(acpm))
-		dev_err(&i2c->dev, "Could not get acpm node");
-		goto err;
+		return dev_err_probe(dev, PTR_ERR(acpm),
+				     "failed to get ACPM handle\n");
 
-	s2mpu08->dev = &i2c->dev;
-	s2mpu08->i2c = i2c;
-	s2mpu08->irq = i2c->irq;
+	s2mpu08->dev = dev;
 	s2mpu08->device_type = S2MPU08X;
 	s2mpu08->acpm = acpm;
 	s2mpu08->acpm_channel_id = 2;
 	s2mpu08->speedy_channel = 0;
+	s2mpu08->pdata = pdata;
+	s2mpu08->wakeup = pdata->wakeup;
+	s2mpu08->irq_gpio = pdata->irq_gpio;
 
-	if (pdata) {
-		s2mpu08->pdata = pdata;
+	pdata->irq_base = devm_irq_alloc_descs(dev, -1, 0, S2MPU08_IRQ_NR, -1);
+	if (pdata->irq_base < 0)
+		return dev_err_probe(dev, pdata->irq_base,
+				     "irq_alloc_descs() failed\n");
+	s2mpu08->irq_base = pdata->irq_base;
 
-		pdata->irq_base = irq_alloc_descs(-1, 0, S2MPU08_IRQ_NR, -1);
-		if (pdata->irq_base < 0) {
-			pr_err("%s:%s irq_alloc_descs Fail! ret(%d)\n",
-				MFD_DEV_NAME, __func__, pdata->irq_base);
-			ret = -EINVAL;
-			goto err;
-		} else
-			s2mpu08->irq_base = pdata->irq_base;
-
-		s2mpu08->irq_gpio = pdata->irq_gpio;
-		s2mpu08->wakeup = pdata->wakeup;
-	} else {
-		pr_err("SIGH");
-		ret = -EINVAL;
-		goto err;
-	}
 	mutex_init(&s2mpu08->i2c_lock);
-	pr_err("MUTEXDONE");
+	platform_set_drvdata(pdev, s2mpu08);
 
-	i2c_set_clientdata(i2c, s2mpu08);
-	pr_err("CLIENTDONE");
+	/* Per sub-block register-access handles (address selects the block). */
+	s2mpu08->pmic = s2mpu08_reg_handle(dev, s2mpu08, I2C_ADDR_PMIC);
+	s2mpu08->rtc = s2mpu08_reg_handle(dev, s2mpu08, I2C_ADDR_RTC);
+	s2mpu08->close = s2mpu08_reg_handle(dev, s2mpu08, I2C_ADDR_CLOSE);
+	s2mpu08->codeca = s2mpu08_reg_handle(dev, s2mpu08, I2C_ADDR_CODECA);
+	if (!s2mpu08->pmic || !s2mpu08->rtc || !s2mpu08->close ||
+	    !s2mpu08->codeca)
+		return -ENOMEM;
+	s2mpu08->i2c = s2mpu08->pmic;
 
-	/* TODO */
-	if (s2mpu08_read_reg(i2c, S2MPU08_PMIC_REG_PMICID, &reg_data) < 0) {
-		dev_err(s2mpu08->dev,
-			"device not found on this channel (this is not an error)\n");
-		ret = -ENODEV;
-		goto err_w_lock;
+	/*
+	 * The chip ID is register 0x00 of the TOP block. Register 0x00 of
+	 * the PMIC block is INT1 (clear-on-read), which reads back 0 and
+	 * would select the revision-0 LDO35/36 workarounds.
+	 */
+	top = s2mpu08_reg_handle(dev, s2mpu08, I2C_ADDR_TOP);
+	if (!top)
+		return -ENOMEM;
+	ret = s2mpu08_read_reg(top, S2MPU08_PMIC_REG_PMICID, &reg_data);
+	if (ret < 0)
+		return dev_err_probe(dev, ret,
+				     "failed to read PMIC ID over ACPM\n");
+	s2mpu08->pmic_rev = reg_data;
+	dev_info(dev, "S2MPU08 PMIC revision 0x%02x\n", s2mpu08->pmic_rev);
+
+	s2mpu08->irq = platform_get_irq_optional(pdev, 0);
+	if (s2mpu08->irq > 0) {
+		ret = s2mpu08_irq_init(s2mpu08);
+		if (ret < 0)
+			dev_warn(dev,
+				 "IRQ init failed (%d); continuing without PMIC IRQ\n",
+				 ret);
 	} else {
-		/* print rev */
-		s2mpu08->pmic_rev = reg_data;
+		dev_warn(dev, "no PMIC IRQ; continuing without it\n");
 	}
 
-	s2mpu08->pmic = i2c_new_dummy_device(i2c->adapter, I2C_ADDR_PMIC);
-	s2mpu08->rtc = i2c_new_dummy_device(i2c->adapter, I2C_ADDR_RTC);
-	s2mpu08->close = i2c_new_dummy_device(i2c->adapter, I2C_ADDR_CLOSE);
-	s2mpu08->codeca = i2c_new_dummy_device(i2c->adapter, I2C_ADDR_CODECA);
-	pr_err("DUMMYDEVDONE");
-/* I2C SPEEDY NOT IMPLEMENTED
-	if (pdata->use_i2c_speedy) {
-		dev_err(s2mpu08->dev, "use_i2c_speedy was true\n");
-		s2mpu08->pmic->flags |= I2C_CLIENT_SPEEDY;
-		s2mpu08->rtc->flags |= I2C_CLIENT_SPEEDY;
-		s2mpu08->close->flags |= I2C_CLIENT_SPEEDY;
-		s2mpu08->codeca->flags |= I2C_CLIENT_SPEEDY;
-	}
-*/
-	i2c_set_clientdata(s2mpu08->pmic, s2mpu08);
-	i2c_set_clientdata(s2mpu08->rtc, s2mpu08);
-	i2c_set_clientdata(s2mpu08->close, s2mpu08);
-	i2c_set_clientdata(s2mpu08->codeca, s2mpu08);
-	pr_err("SETCLIENTDONE");
-
-	ret = s2mpu08_irq_init(s2mpu08);
+	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_NONE, s2mpu08_devs,
+				   ARRAY_SIZE(s2mpu08_devs), NULL, 0, NULL);
 	if (ret < 0)
-		goto err_irq_init;
+		return dev_err_probe(dev, ret, "failed to add MFD devices\n");
 
-	ret = mfd_add_devices(s2mpu08->dev, -1, s2mpu08_devs,
-			ARRAY_SIZE(s2mpu08_devs), NULL, 0, NULL);
-	if (ret < 0)
-		goto err_mfd;
+	device_init_wakeup(dev, pdata->wakeup);
 
-	device_init_wakeup(s2mpu08->dev, pdata->wakeup);
-	pr_err("%s: init returns %d", MFD_DEV_NAME, ret);
-	return ret;
-
-err_mfd:
-	pr_err("UH OH MFD FAILED: %d", ret);
-	mfd_remove_devices(s2mpu08->dev);
-err_irq_init:
-	pr_err("UH OH IRQ FAILED: %d", ret);
-	i2c_unregister_device(s2mpu08->i2c);
-err_w_lock:
-	pr_err("UH OH WLOCK FAILED: %d", ret);
-	mutex_destroy(&s2mpu08->i2c_lock);
-err:
-	kfree(s2mpu08);
-	return ret;
+	return 0;
 }
 
-static void s2mpu08_i2c_remove(struct i2c_client *i2c)
+static void s2mpu08_remove(struct platform_device *pdev)
 {
-	struct s2mpu08_dev *s2mpu08 = i2c_get_clientdata(i2c);
-
-	mfd_remove_devices(s2mpu08->dev);
-	i2c_unregister_device(s2mpu08->i2c);
-	kfree(s2mpu08);
+	/* All resources are devm-managed. */
 }
-
-static const struct i2c_device_id s2mpu08_i2c_id[] = {
-	{ "s2mpu08" },
-	{ },
-};
-MODULE_DEVICE_TABLE(i2c, s2mpu08_i2c_id);
 
 static const struct of_device_id s2mpu08_of_match[] = {
 	{ .compatible = "samsung,s2mpu08" },
@@ -617,74 +596,51 @@ static const struct of_device_id s2mpu08_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, s2mpu08_of_match);
 
-#if defined(CONFIG_PM)
+#ifdef CONFIG_PM
 static int s2mpu08_suspend(struct device *dev)
 {
-	struct i2c_client *i2c = container_of(dev, struct i2c_client, dev);
-	struct s2mpu08_dev *s2mpu08 = i2c_get_clientdata(i2c);
+	struct s2mpu08_dev *s2mpu08 = dev_get_drvdata(dev);
 
-	if (device_may_wakeup(dev))
-		enable_irq_wake(s2mpu08->irq);
-
-	disable_irq(s2mpu08->irq);
+	if (s2mpu08->irq > 0) {
+		if (device_may_wakeup(dev))
+			enable_irq_wake(s2mpu08->irq);
+		disable_irq(s2mpu08->irq);
+	}
 
 	return 0;
 }
 
 static int s2mpu08_resume(struct device *dev)
 {
-	struct i2c_client *i2c = container_of(dev, struct i2c_client, dev);
-	struct s2mpu08_dev *s2mpu08 = i2c_get_clientdata(i2c);
+	struct s2mpu08_dev *s2mpu08 = dev_get_drvdata(dev);
 
-	if (device_may_wakeup(dev))
-		disable_irq_wake(s2mpu08->irq);
-
-	enable_irq(s2mpu08->irq);
+	if (s2mpu08->irq > 0) {
+		if (device_may_wakeup(dev))
+			disable_irq_wake(s2mpu08->irq);
+		enable_irq(s2mpu08->irq);
+	}
 
 	return 0;
 }
 #else
 #define s2mpu08_suspend	NULL
-#define s2mpu08_resume NULL
+#define s2mpu08_resume	NULL
 #endif /* CONFIG_PM */
-/*
-const struct dev_pm_ops s2mpu08_pm = {
-	.suspend_late = s2mpu08_suspend,
-	.resume_early = s2mpu08_resume,
-};
-*/
+
 static const struct dev_pm_ops s2mpu08_pm = {
 	LATE_SYSTEM_SLEEP_PM_OPS(s2mpu08_suspend, s2mpu08_resume)
 };
 
-static struct i2c_driver s2mpu08_i2c_driver = {
-	.driver		= {
-		.name	= "s2mpu08",
-//		.owner	= THIS_MODULE,
-		.pm	= &s2mpu08_pm,
-		.of_match_table	= s2mpu08_of_match,
+static struct platform_driver s2mpu08_driver = {
+	.driver = {
+		.name = "s2mpu08",
+		.pm = &s2mpu08_pm,
+		.of_match_table = s2mpu08_of_match,
 	},
-	.probe		= s2mpu08_i2c_probe,
-	.remove		= s2mpu08_i2c_remove,
-	.id_table	= s2mpu08_i2c_id,
+	.probe = s2mpu08_probe,
+	.remove = s2mpu08_remove,
 };
-
-static int __init s2mpu08_i2c_init(void)
-{
-	pr_err("halp %s:%s\n", MFD_DEV_NAME, __func__);
-	return i2c_add_driver(&s2mpu08_i2c_driver);
-}
-/* init early so consumer devices can complete system boot */
-//subsys_initcall(s2mpu08_i2c_init);
-//module_i2c_driver(s2mpu08_i2c_driver);
-
-module_init(s2mpu08_i2c_init);
-
-static void __exit s2mpu08_i2c_exit(void)
-{
-	i2c_del_driver(&s2mpu08_i2c_driver);
-}
-module_exit(s2mpu08_i2c_exit);
+module_platform_driver(s2mpu08_driver);
 
 MODULE_DESCRIPTION("s2mpu08 multi-function core driver");
 MODULE_AUTHOR("Samsung Electronics");
