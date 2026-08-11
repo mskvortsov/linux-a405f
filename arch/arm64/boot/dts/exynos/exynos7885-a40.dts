@@ -105,8 +105,16 @@
 			no-map;
 		};
 
+		/*
+		 * Shared with the WLBT R4/M4, which master into it directly
+		 * and are not coherent with AP caches: no-map keeps it out
+		 * of the kernel linear mapping so the driver can map it
+		 * write-combining and have the firmware image actually land
+		 * in DRAM.
+		 */
 		wifibt_rmem: wifibt@e9000000 {
 			reg = <0x0 0xe9000000 0x400000>;
+			no-map;
 		};
 
 		abox_rmem: abox@e9400000 {
@@ -432,6 +440,37 @@
 
 &watchdog {
 	status = "okay";
+};
+
+&soc {
+	/*
+	 * SCSC "Maxwell" WLBT (WiFi/BT combo) companion chip.
+	 * Two register windows (R4 and M4 mailbox/control SFRs); only
+	 * the R4 side raises an interrupt to the AP today. Power/reset
+	 * sequencing goes through PMU_ALIVE via the syscon phandle below
+	 * (WIFI_CTRL_NS/S at PMU offsets 0x140/0x144), same block used
+	 * to gate the ACPM CM4.
+	 */
+	scsc_wifibt: wifibt@120c0000 {
+		compatible = "samsung,exynos7885-scsc-wifibt";
+		reg = <0x120c0000 0x180>, /* R4 */
+		      <0x120e0000 0x180>; /* M4 */
+		interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 21 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 286 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "mbox", "alive", "wdog";
+		samsung,syscon-phandle = <&pmu_system_controller>;
+		memory-region = <&wifibt_rmem>;
+		/*
+		 * Vendor platform_mif_reset() sends an ACPM DVFS "SET_FLAG"
+		 * request (id=7) on this same channel cpufreq uses, right
+		 * before releasing PMU reset -- believed to guard a shared
+		 * rail (BUCK2/vdd_cpucl0) from an inrush-current dip.
+		 */
+		samsung,acpm-ipc = <&acpm_ipc>;
+		samsung,acpm-dvfs-channel = <0>;
+		status = "okay";
+	};
 };
 
 &pinctrl_top {

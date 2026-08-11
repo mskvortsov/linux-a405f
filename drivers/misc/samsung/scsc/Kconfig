@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config SCSC_MX
+	tristate "Samsung SCSC Maxwell (WLBT) core driver"
+	depends on (ARCH_EXYNOS && OF) || COMPILE_TEST
+	depends on EXYNOS_ACPM_PROTOCOL
+	depends on CFG80211
+	depends on BT
+	help
+	  Core driver for the Samsung SCSC "Maxwell" WLBT companion chip
+	  (WiFi/BT combo) found on several Exynos-based Samsung phones.
+
+	  This manages the AP<->WLBT mailbox register windows and chip
+	  power/reset sequencing via PMU_ALIVE, boots firmware onto the
+	  chip, and carries the HIP4 transport and FAPI signal layer. It
+	  registers a cfg80211 interface with scan, association, and a data
+	  path, and a hci_dev with HCI command/event and ACL data over the
+	  BSMHCP rings. WLAN and BT can run concurrently on this firmware
+	  and both start by default.
+
+	  Say M here to build it as a module, so it can be reloaded while
+	  bringing the chip up without rebuilding/reflashing the kernel.
