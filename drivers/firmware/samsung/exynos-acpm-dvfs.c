@@ -20,6 +20,9 @@
 
 #define ACPM_DVFS_FREQ_REQ		0
 #define ACPM_DVFS_FREQ_GET		1
+#define ACPM_DVFS_DATA_INIT		5
+#define ACPM_DVFS_SET_INIT_FREQ		3
+#define ACPM_DVFS_SET_FLAG		6
 
 static void acpm_dvfs_init_set_rate_cmd(u32 cmd[4], unsigned int clk_id,
 					unsigned long rate)
@@ -27,7 +30,7 @@ static void acpm_dvfs_init_set_rate_cmd(u32 cmd[4], unsigned int clk_id,
 	cmd[0] = FIELD_PREP(ACPM_DVFS_ID, clk_id);
 	cmd[1] = rate / HZ_PER_KHZ;
 	cmd[2] = FIELD_PREP(ACPM_DVFS_REQ_TYPE, ACPM_DVFS_FREQ_REQ);
-	cmd[3] = ktime_to_ms(ktime_get());
+	cmd[3] = 0;
 }
 
 int acpm_dvfs_set_rate(struct acpm_handle *handle,
@@ -38,7 +41,7 @@ int acpm_dvfs_set_rate(struct acpm_handle *handle,
 	u32 cmd[4];
 
 	acpm_dvfs_init_set_rate_cmd(cmd, clk_id, rate);
-	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, false);
+	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, true);
 
 	return acpm_do_xfer(handle, &xfer);
 }
@@ -47,7 +50,23 @@ static void acpm_dvfs_init_get_rate_cmd(u32 cmd[4], unsigned int clk_id)
 {
 	cmd[0] = FIELD_PREP(ACPM_DVFS_ID, clk_id);
 	cmd[2] = FIELD_PREP(ACPM_DVFS_REQ_TYPE, ACPM_DVFS_FREQ_GET);
-	cmd[3] = ktime_to_ms(ktime_get());
+	cmd[3] = 0;
+}
+
+int acpm_dvfs_set_init_freq(struct acpm_handle *handle,
+			    unsigned int acpm_chan_id, unsigned int clk_id,
+			    unsigned long rate)
+{
+	struct acpm_xfer xfer = {0};
+	u32 cmd[4] = {
+		FIELD_PREP(ACPM_DVFS_ID, clk_id),
+		rate / HZ_PER_KHZ,
+		FIELD_PREP(ACPM_DVFS_REQ_TYPE, ACPM_DVFS_DATA_INIT),
+		ACPM_DVFS_SET_INIT_FREQ,
+	};
+
+	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, true);
+	return acpm_do_xfer(handle, &xfer);
 }
 
 unsigned long acpm_dvfs_get_rate(struct acpm_handle *handle,
@@ -65,4 +84,28 @@ unsigned long acpm_dvfs_get_rate(struct acpm_handle *handle,
 		return 0;
 
 	return xfer.rxd[1] * HZ_PER_KHZ;
+}
+
+/*
+ * Sets an out-of-band flag on the ACPM DVFS firmware, keyed by an
+ * opaque per-flag "id" rather than a clk_id -- distinct from the
+ * dvfs_* domain enum used by set_rate/get_rate. The only known vendor
+ * caller uses id=7 immediately before releasing a peripheral (WLBT)
+ * from PMU reset, to protect a shared rail from an inrush-current
+ * voltage dip; the exact firmware-side meaning of "id" beyond that is
+ * opaque without the ACPM firmware source.
+ */
+int acpm_dvfs_set_flag(struct acpm_handle *handle, unsigned int acpm_chan_id,
+		       unsigned int id, unsigned int flag)
+{
+	struct acpm_xfer xfer = {0};
+	u32 cmd[4] = {
+		FIELD_PREP(ACPM_DVFS_ID, id),
+		flag,
+		FIELD_PREP(ACPM_DVFS_REQ_TYPE, ACPM_DVFS_SET_FLAG),
+		0,
+	};
+
+	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, true);
+	return acpm_do_xfer(handle, &xfer);
 }

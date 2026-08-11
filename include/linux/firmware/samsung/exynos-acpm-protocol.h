@@ -19,6 +19,10 @@ struct acpm_dvfs_ops {
 	unsigned long (*get_rate)(struct acpm_handle *handle,
 				  unsigned int acpm_chan_id,
 				  unsigned int clk_id);
+	int (*set_init_freq)(struct acpm_handle *handle, unsigned int acpm_chan_id,
+			     unsigned int clk_id, unsigned long rate);
+	int (*set_flag)(struct acpm_handle *handle, unsigned int acpm_chan_id,
+			unsigned int id, unsigned int flag);
 };
 
 struct acpm_pmic_ops {

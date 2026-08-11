@@ -171,17 +171,17 @@
 		};
 	};
 
-	apm_sram: sram@14B00000 {
+	apm_sram: sram@2052000 {
 		compatible = "mmio-sram";
-		reg = <0x0 0x14B00000 0x28000>;
+		reg = <0x0 0x02052000 0x1b000>;
 		#address-cells = <1>;
 		#size-cells = <1>;
-		ranges = <0x0 0x0 0x14B00000 0x28000>;
+		ranges = <0x0 0x0 0x02052000 0x1b000>;
 	};
 
 	firmware {
 		acpm_ipc: power-management {
-			compatible = "google,gs101-acpm-ipc";
+			compatible = "samsung,exynos7885-acpm-ipc";
 			#address-cells = <1>;
 			#size-cells = <0>;
 			mboxes = <&ap2apm_mailbox>;

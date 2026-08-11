@@ -13,6 +13,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/find.h>
+#include <linux/firmware.h>
 #include <linux/firmware/samsung/exynos-acpm-protocol.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
@@ -40,6 +41,33 @@
 #define ACPM_TX_TIMEOUT_US		500000
 
 #define ACPM_GS101_INITDATA_BASE	0xa000
+#define ACPM_EXYNOS7885_INITDATA_BASE	0x4b80
+
+/*
+ * Exynos7885 PMU registers for power-cycling the ACPM CM4 core.
+ * PMU_ALIVE is a sub-block of the main PMU (base 0x11C80000) at offset 0x8000.
+ * Vendor reference: drivers/soc/samsung/acpm/acpm.c in Samsung 4.14 BSP.
+ */
+#define ACPM_EXYNOS7885_PMU_ALIVE_BASE	0x11C88000
+#define ACPM_EXYNOS7885_PMU_APM_CONF	0x0100
+#define ACPM_EXYNOS7885_PMU_APM_STAT	0x0104
+#define ACPM_EXYNOS7885_APM_PWR_ON	BIT(0)
+
+/*
+ * ACPM framework IPC protocol bits in cmd[0] (from vendor acpm_ipc_ctrl.h).
+ * Used for dynamic plugin attach/detach on the framework channel (ch:4).
+ */
+#define ACPM_IPC_PROTOCOL_DP_A		25	/* bit 25: dynamic plugin attach */
+#define ACPM_IPC_PROTOCOL_ID		26	/* bits 28:26: plugin ID */
+#define ACPM_FRAMEWORK_CHAN		4	/* framework IPC channel index */
+
+/* CM4 plugin struct layout in SRAM (32-bit CM4 ABI, 44 bytes each) */
+#define ACPM_PLUGIN_STRUCT_SIZE		44
+#define ACPM_PLUGIN_OFF_ID		0
+#define ACPM_PLUGIN_OFF_BASE		4
+#define ACPM_PLUGIN_OFF_ATTACHED	28
+#define ACPM_PLUGIN_OFF_STAY		36
+#define ACPM_PLUGIN_OFF_FW_NAME		40
 
 /**
  * struct acpm_shmem - shared memory configuration information.
@@ -183,10 +211,12 @@ struct acpm_info {
  * struct acpm_match_data - of_device_id data.
  * @initdata_base:	offset in SRAM where the channels configuration resides.
  * @acpm_clk_dev_name:	base name for the ACPM clocks device that we're registering.
+ * @reset_cm4:		optional chip-specific CM4 reset, called before channel init.
  */
 struct acpm_match_data {
 	loff_t initdata_base;
 	const char *acpm_clk_dev_name;
+	int (*reset_cm4)(struct device *dev);
 };
 
 #define client_to_acpm_chan(c) container_of(c, struct acpm_chan, cl)
@@ -350,8 +380,10 @@ static int acpm_dequeue_by_polling(struct acpm_chan *achan,
 		udelay(20);
 	} while (ktime_before(ktime_get(), timeout));
 
-	dev_err(dev, "Timeout! ch:%u s:%u bitmap:%lx.\n",
-		achan->id, seqnum, achan->bitmap_seqnum[0]);
+	dev_err(dev, "Timeout! ch:%u s:%u bitmap:%lx. rx_front=%u rx_rear=%u tx_front=%u tx_rear=%u\n",
+		achan->id, seqnum, achan->bitmap_seqnum[0],
+		readl(achan->rx.front), readl(achan->rx.rear),
+		readl(achan->tx.front), readl(achan->tx.rear));
 
 	return -ETIME;
 }
@@ -566,8 +598,6 @@ static void acpm_chan_shmem_get_params(struct acpm_chan *achan,
 	rx->rear = base + readl(&chan_shmem->tx_rear);
 	rx->front = base + readl(&chan_shmem->tx_front);
 
-	dev_vdbg(achan->acpm->dev, "ID = %d poll = %d, mlen = %d, qlen = %d\n",
-		 achan->id, achan->poll_completion, achan->mlen, achan->qlen);
 }
 
 /**
@@ -676,6 +706,8 @@ static const struct acpm_ops exynos_acpm_driver_ops = {
 	.dvfs = {
 		.set_rate = acpm_dvfs_set_rate,
 		.get_rate = acpm_dvfs_get_rate,
+		.set_init_freq = acpm_dvfs_set_init_freq,
+		.set_flag = acpm_dvfs_set_flag,
 	},
 
 	.pmic = {
@@ -697,6 +729,173 @@ static const struct acpm_ops exynos_acpm_driver_ops = {
 		.resume = acpm_tmu_resume,
 	},
 };
+
+static int __maybe_unused acpm_exynos7885_reset_cm4(struct device *dev)
+{
+	void __iomem *pmu;
+	u32 val;
+	int ret;
+
+	pmu = ioremap(ACPM_EXYNOS7885_PMU_ALIVE_BASE, 0x200);
+	if (!pmu)
+		return -ENOMEM;
+
+	val = readl(pmu + ACPM_EXYNOS7885_PMU_APM_CONF);
+	dev_info(dev, "CM4 reset: CONF=0x%x STAT=0x%x\n",
+		 val, readl(pmu + ACPM_EXYNOS7885_PMU_APM_STAT));
+
+	/* Assert CM4 reset (power off). */
+	writel(val & ~ACPM_EXYNOS7885_APM_PWR_ON,
+	       pmu + ACPM_EXYNOS7885_PMU_APM_CONF);
+	ret = readl_poll_timeout(pmu + ACPM_EXYNOS7885_PMU_APM_STAT,
+				 val, !(val & ACPM_EXYNOS7885_APM_PWR_ON),
+				 10, 50000);
+	if (ret)
+		dev_warn(dev, "CM4 power-down timeout (STAT=0x%x)\n", val);
+
+	/* Deassert reset: CM4 re-runs firmware from SRAM. */
+	val = readl(pmu + ACPM_EXYNOS7885_PMU_APM_CONF);
+	writel(val | ACPM_EXYNOS7885_APM_PWR_ON,
+	       pmu + ACPM_EXYNOS7885_PMU_APM_CONF);
+	ret = readl_poll_timeout(pmu + ACPM_EXYNOS7885_PMU_APM_STAT,
+				 val, val & ACPM_EXYNOS7885_APM_PWR_ON,
+				 100, 100000);
+
+	dev_info(dev, "CM4 reset: power-up STAT=0x%x ret=%d\n", val, ret);
+	iounmap(pmu);
+
+	if (ret)
+		return dev_err_probe(dev, ret, "CM4 failed to power up\n");
+
+	/*
+	 * Wait for CM4 firmware to complete its initialization sequence
+	 * (DRAM controller setup + PMIC bringup, ~200ms observed in S-Boot).
+	 * TODO: poll a CM4-written SRAM ready marker instead.
+	 */
+	msleep(500);
+
+	return 0;
+}
+
+/*
+ * acpm_preload_plugin_firmware - copy plugin firmware blobs into SRAM before
+ * CM4 reset, so CM4's own dynamic-plugin init finds the correct binary.
+ *
+ * S-Boot loads a different (incompatible) FVP binary into SRAM.  When CM4
+ * resets and tries to call FVP's init entry at base_addr, it crashes (hard
+ * fault at PC=0x7806).  The vendor Linux driver overwrites the S-Boot binary
+ * with the correct blob before reset via firmware_update(); we do the same
+ * here using request_firmware().
+ *
+ * Must be called BEFORE resetting CM4.
+ */
+static void acpm_preload_plugin_firmware(struct acpm_info *acpm,
+					 resource_size_t sram_size)
+{
+	struct device *dev = acpm->dev;
+	void __iomem *fw_hdr = acpm->shmem;
+	u32 plugins_off = readl(fw_hdr + 0);
+	u32 num_plugins = readl(fw_hdr + 4);
+	u32 i;
+
+	for (i = 0; i < min(num_plugins, 8u); i++) {
+		void __iomem *p = acpm->sram_base + plugins_off + i * 44;
+		u8  stay     = readb(p + 36);
+		u8  attached = readb(p + 28);
+		u32 base     = readl(p +  4);
+		u32 fw_off   = readl(p + 40);
+		char fw_name[48] = {};
+		const struct firmware *fw;
+		resource_size_t dest;
+
+		if (!stay || attached || !fw_off || !base)
+			continue;
+
+		if (fw_off + sizeof(fw_name) < sram_size)
+			memcpy_fromio(fw_name, acpm->sram_base + fw_off,
+				      sizeof(fw_name) - 1);
+
+		if (!fw_name[0])
+			continue;
+
+		if (request_firmware(&fw, fw_name, dev)) {
+			dev_warn(dev, "plugin fw \"%s\" not found, skipping\n",
+				 fw_name);
+			continue;
+		}
+
+		dest = base & ~1UL;
+		if (dest + fw->size > sram_size) {
+			dev_warn(dev, "plugin fw \"%s\" (%zu B) overflows SRAM\n",
+				 fw_name, fw->size);
+			release_firmware(fw);
+			continue;
+		}
+
+		memcpy_toio(acpm->sram_base + dest, fw->data, fw->size);
+		dev_info(dev, "plugin fw \"%s\" loaded to SRAM+%#lx (%zu B)\n",
+			 fw_name, (unsigned long)dest, fw->size);
+		release_firmware(fw);
+	}
+}
+
+/*
+ * acpm_attach_plugins - send "attach" IPC for dynamic plugins not yet attached.
+ *
+ * Called after CM4 reset.  If CM4's own dyn_plug init succeeded (because we
+ * pre-loaded the correct firmware), the plugin will already be attached and
+ * this function will skip it.  Otherwise it sends an explicit attach IPC so
+ * CM4 calls the plugin's init() at base_addr.
+ */
+static int acpm_attach_plugins(struct acpm_info *acpm, resource_size_t sram_size)
+{
+	struct device *dev = acpm->dev;
+	/* Use void __iomem * for byte-level pointer arithmetic. */
+	void __iomem *initdata = (void __iomem *)acpm->shmem;
+	u32 plugins_off = readl(initdata + 0);
+	u32 num_plugins = readl(initdata + 4);
+	struct acpm_chan *fchan = &acpm->chans[ACPM_FRAMEWORK_CHAN];
+	size_t mwords = fchan->mlen / sizeof(u32);
+	u32 cmd[8] = {};
+	u32 i;
+
+	if (mwords > ARRAY_SIZE(cmd))
+		mwords = ARRAY_SIZE(cmd);
+
+	for (i = 0; i < min(num_plugins, 8u); i++) {
+		void __iomem *p = acpm->sram_base + plugins_off + i * ACPM_PLUGIN_STRUCT_SIZE;
+		u32 id       = readl(p + ACPM_PLUGIN_OFF_ID);
+		u8  attached = readb(p + ACPM_PLUGIN_OFF_ATTACHED);
+		u8  stay     = readb(p + ACPM_PLUGIN_OFF_STAY);
+		u32 fw_off   = readl(p + ACPM_PLUGIN_OFF_FW_NAME);
+		char name[32] = {};
+		struct acpm_xfer xfer = {
+			.txd = cmd,
+			.rxd = cmd,
+			.txcnt = mwords,
+			.rxcnt = mwords,
+			.acpm_chan_id = ACPM_FRAMEWORK_CHAN,
+		};
+		int ret;
+
+		if (!stay || attached)
+			continue;
+
+		if (fw_off && fw_off + sizeof(name) < sram_size)
+			memcpy_fromio(name, acpm->sram_base + fw_off, sizeof(name) - 1);
+
+		memset(cmd, 0, sizeof(cmd));
+		cmd[0] = BIT(ACPM_IPC_PROTOCOL_DP_A) | (id << ACPM_IPC_PROTOCOL_ID);
+
+		ret = acpm_do_xfer(&acpm->handle, &xfer);
+		if (ret)
+			dev_warn(dev, "plugin[%u] attach IPC failed: %d\n", id, ret);
+		else
+			dev_info(dev, "plugin[%u] attached OK\n", id);
+	}
+
+	return 0;
+}
 
 static int acpm_probe(struct platform_device *pdev)
 {
@@ -734,11 +933,26 @@ static int acpm_probe(struct platform_device *pdev)
 	acpm->shmem = acpm->sram_base + match_data->initdata_base;
 	acpm->dev = dev;
 
+	/*
+	 * Pre-load plugin firmware blobs into SRAM before CM4 reset.
+	 * S-Boot leaves a bad FVP binary at SRAM+0x7800; writing the correct
+	 * one here lets CM4's own dyn_plug init succeed after the reset.
+	 */
+	acpm_preload_plugin_firmware(acpm, size);
+
+	if (match_data->reset_cm4) {
+		ret = match_data->reset_cm4(dev);
+		if (ret)
+			return ret;
+	}
+
 	ret = acpm_channels_init(acpm);
 	if (ret)
 		return ret;
 
 	acpm->handle.ops = &exynos_acpm_driver_ops;
+
+	acpm_attach_plugins(acpm, size);
 
 	platform_set_drvdata(pdev, acpm);
 
@@ -881,10 +1095,26 @@ static const struct acpm_match_data acpm_gs101 = {
 	.acpm_clk_dev_name = "gs101-acpm-clk",
 };
 
+static const struct acpm_match_data acpm_exynos7885 = {
+	.initdata_base = ACPM_EXYNOS7885_INITDATA_BASE,
+	.acpm_clk_dev_name = "exynos7885-acpm-clk",
+	/*
+	 * Do NOT reset CM4. S-Boot leaves CM4 in IPC-ready state after its
+	 * crash+NMI recovery (NVIC enabled, idle loop running). acpm_preload_
+	 * plugin_firmware() overwrites the bad FVP binary in SRAM, then the
+	 * attach IPC on ch:4 triggers CM4 to re-run FVP init with the correct
+	 * binary — exactly what the vendor Linux driver does.
+	 */
+};
+
 static const struct of_device_id acpm_match[] = {
 	{
 		.compatible = "google,gs101-acpm-ipc",
 		.data = &acpm_gs101,
+	},
+	{
+		.compatible = "samsung,exynos7885-acpm-ipc",
+		.data = &acpm_exynos7885,
 	},
 	{},
 };
