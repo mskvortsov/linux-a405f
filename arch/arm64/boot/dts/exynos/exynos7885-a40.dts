@@ -161,13 +161,21 @@
 	/*
 	 * Cell parameters from the downstream battery_data_a40_common.dtsi:
 	 * 3100 mAh pack, 4.35 V float (battery,chg_float_voltage). Consumed by
-	 * the S2MU106 fuel gauge via monitored-battery.
+	 * the S2MU106 fuel gauge and charger via monitored-battery.
+	 *
+	 * constant-charge-current-max-microamp and charge-term-current-microamp
+	 * aren't in the downstream DT (they come from a cable-type current
+	 * table the charger driver doesn't implement yet); these are
+	 * conservative MVP defaults, not vendor-supplied values.
 	 */
 	battery: battery {
 		compatible = "simple-battery";
 		charge-full-design-microamp-hours = <3100000>;
 		voltage-max-design-microvolt = <4350000>;
 		voltage-min-design-microvolt = <3400000>;
+		constant-charge-voltage-max-microvolt = <4350000>;
+		constant-charge-current-max-microamp = <1000000>;
+		charge-term-current-microamp = <150000>;
 	};
 
 	tsp_avdd: tsp-avdd {
@@ -219,8 +227,9 @@
 
 /*
  * S2MU106 PMIC fuel gauge. Downstream puts it on i2c_0 (the s3c2440 I2C
- * controller at 0x13830000); its alert line is on gpa2-4. The charger,
- * MUIC and USB-PD blocks of the same PMIC are not wired up here.
+ * controller at 0x13830000); its alert line is on gpa2-4. The MUIC and
+ * USB-PD blocks of the same PMIC are not wired up here; the charger block
+ * is (see &i2c_1 below).
  */
 &i2c_0 {
 	#address-cells = <1>;
@@ -239,6 +248,34 @@
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&fuel_irq>;
+
+		monitored-battery = <&battery>;
+	};
+};
+
+/*
+ * S2MU106 PMIC charger block, at its own i2c address on a separate bus
+ * from the fuel gauge (matches downstream). Its IRQ line is shared with
+ * the MUIC/AFC/PM/haptic-boost blocks of the same PMIC; those aren't
+ * wired up here, so the charger driver masks them off at the top-level
+ * demux and only listens for its own events.
+ */
+&i2c_1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	status = "okay";
+
+	charger@3d {
+		compatible = "samsung,s2mu106-charger";
+		reg = <0x3d>;
+
+		interrupt-parent = <&gpa2>;
+		interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&if_pmic_irq>;
 
 		monitored-battery = <&battery>;
 	};
@@ -339,6 +376,14 @@
 	/* S2MU106 fuel gauge alert (downstream pulls this up). */
 	fuel_irq: fuel-irq-pins {
 		samsung,pins = "gpa2-4";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/* S2MU106 charger/MUIC/AFC/PM top-level IRQ demux line. */
+	if_pmic_irq: if-pmic-irq-pins {
+		samsung,pins = "gpa2-2";
 		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
 		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
 		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;

@@ -193,22 +193,25 @@ static int s2mu106_fg_get_capacity(struct s2mu106_fg *priv, int *value)
 
 static int s2mu106_fg_get_status(struct s2mu106_fg *priv, int *value)
 {
-	int current_now, current_avg, capacity;
+	int current_now, capacity;
 	int ret;
 
 	ret = s2mu106_fg_get_current_now(priv, &current_now);
 	if (ret < 0)
 		return ret;
 
-	ret = s2mu106_fg_get_current_avg(priv, &current_avg);
-	if (ret < 0)
-		return ret;
-
 	/*
-	 * Verify both current values reported to reduce inaccuracies due to
-	 * internal hysteresis.
+	 * Deliberately not cross-checked against current_avg: measured live
+	 * against a real charge session, current_avg sat around +4.6mA both
+	 * while current_now read +370mA (genuinely charging - well under 0.15C
+	 * on this cell, but real current flowing in) and, an hour later, while
+	 * current_now was oscillating either side of zero (genuinely idle) -
+	 * it's decoupled from the present charge/discharge direction, not just
+	 * laggy. Requiring it negative too (as this used to) meant a real
+	 * negative current_now got reported as CHARGING whenever that positive
+	 * residual was still sitting in current_avg.
 	 */
-	if (current_now < 0 && current_avg < 0) {
+	if (current_now < 0) {
 		*value = POWER_SUPPLY_STATUS_DISCHARGING;
 	} else if (current_now == 0) {
 		*value = POWER_SUPPLY_STATUS_NOT_CHARGING;

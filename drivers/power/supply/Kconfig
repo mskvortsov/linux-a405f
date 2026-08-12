@@ -1017,6 +1017,19 @@ config CHARGER_RT9756
 	  This driver can also be built as a module. If so, the module will be
 	  called rt9756.
 
+config CHARGER_S2MU106
+	tristate "Samsung S2MU106 PMIC battery charger driver"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Say Y to enable support for the Samsung S2MU106 PMIC integrated
+	  battery charger. The S2MU106 is used on Exynos 7904 devices such
+	  as the Galaxy A30 and A40; this driver only covers the charger
+	  block (input/fast-charge current, float voltage, status/health
+	  reporting), not OTG boost or AFC/HV fast-charge negotiation.
+
+	  This driver, if built as a module, will be called s2mu106-charger.
+
 config CHARGER_CROS_USBPD
 	tristate "ChromeOS EC based USBPD charger"
 	depends on CROS_USBPD_NOTIFY
