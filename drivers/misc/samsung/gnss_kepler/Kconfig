@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config GNSS_KEPLER
+	tristate "Samsung Kepler GNSS companion chip bring-up driver"
+	depends on (ARCH_EXYNOS && OF) || COMPILE_TEST
+	help
+	  Bring-up driver for the Samsung "Kepler" GNSS companion chip
+	  found on several Exynos-based Samsung phones.
+
+	  Milestone 1: PMU_ALIVE power-on sequencing and fault-region
+	  readback via debugfs only. No MCU_IPC mailbox protocol, no
+	  BCMD, no firmware load yet -- see gnss.md in the tree root for
+	  the downstream hardware investigation this is based on.
+
+	  Say M here to build it as a module, so it can be reloaded
+	  while bringing the chip up without rebuilding/reflashing the
+	  kernel.

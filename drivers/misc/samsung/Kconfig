@@ -1,3 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 source "drivers/misc/samsung/scsc/Kconfig"
+source "drivers/misc/samsung/gnss_kepler/Kconfig"

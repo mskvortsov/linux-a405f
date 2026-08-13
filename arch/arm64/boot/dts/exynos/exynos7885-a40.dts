@@ -135,6 +135,22 @@
 			reg = <0x0 0xfdc00000 0x2000000>;
 		};
 
+		/*
+		 * Shared with the Kepler GNSS core. Deliberately *not*
+		 * no-map: marking it no-map made the early memblock
+		 * reservation itself fail at boot ("OF: reserved mem:
+		 * Reserved memory: failed to reserve memory for node
+		 * 'gnss@ffc00000'"), reproducibly, and adding no-map to
+		 * the preceding regions to rule out an adjacency effect
+		 * didn't fix it either -- a real memblock-level quirk, not
+		 * yet root-caused (see gnss.md). Left as a plain reserve()
+		 * like modem_rmem/cp_ram_logging_rmem above, which has
+		 * always worked reliably here; the driver uses memremap()
+		 * rather than ioremap_wc() to match (ioremap's PFN-is-RAM
+		 * refusal applies regardless of no-map once excluded from
+		 * the linear map, but with the region left mapped normally
+		 * memremap()'s RAM-aware path is the correct tool anyway).
+		 */
 		gnss_rmem: gnss@ffc00000 {
 			reg = <0x0 0xffc00000 0x400000>;
 		};
@@ -469,6 +485,27 @@
 		 */
 		samsung,acpm-ipc = <&acpm_ipc>;
 		samsung,acpm-dvfs-channel = <0>;
+		status = "okay";
+	};
+
+	/*
+	 * Samsung "Kepler" GNSS companion chip. MCU_IPC mailbox window
+	 * (milestone 2: one BCMD send, see drivers/misc/samsung/gnss_kepler/
+	 * and gnss.md). Power/reset sequencing goes through PMU_ALIVE via
+	 * the same syscon phandle WLBT uses above (GNSS_CTRL_NS/S at PMU
+	 * offsets 0x40/0x44). "active"/"watchdog"/"mbox" match the
+	 * downstream gnss_pdata/mailbox_gnss nodes' interrupt-names;
+	 * "wakeup" isn't wired up yet.
+	 */
+	gnss_kepler: gnss@120d0000 {
+		compatible = "samsung,exynos7885-gnss-kepler";
+		reg = <0x120d0000 0x180>;
+		interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 165 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 56 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "active", "watchdog", "mbox";
+		samsung,syscon-phandle = <&pmu_system_controller>;
+		memory-region = <&gnss_rmem>;
 		status = "okay";
 	};
 };
