@@ -342,6 +342,17 @@
 				      "dout_peri_usi2";
 		};
 
+		cmu_apm: clock-controller@11c00000 {
+			compatible = "samsung,exynos7885-cmu-apm";
+			reg = <0x11c00000 0x8000>;
+			#clock-cells = <1>;
+
+			clocks = <&oscclk>,
+				 <&cmu_top CLK_DOUT_APM_BUS>;
+			clock-names = "oscclk",
+				      "dout_apm_bus";
+		};
+
 		cmu_core: clock-controller@12000000 {
 			compatible = "samsung,exynos7885-cmu-core";
 			reg = <0x12000000 0x8000>;
