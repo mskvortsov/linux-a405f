@@ -691,6 +691,7 @@
 
 			buck7_reg: BUCK7 {
 				regulator-name = "vdd_lldo";
+				regulator-always-on;
 			};
 
 			buck8_reg: BUCK8 {
@@ -700,6 +701,7 @@
 
 			ldo1_reg: LDO1 {
 				regulator-name = "vdd_ldo1";
+				regulator-always-on;
 			};
 
 			ldo2_reg: LDO2 {
