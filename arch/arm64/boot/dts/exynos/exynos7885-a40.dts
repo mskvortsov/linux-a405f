@@ -10,6 +10,15 @@
 	compatible = "samsung,a40", "samsung,exynos7885";
 	chassis-type = "handset";
 
+	/*
+	 * Keep the eMMC at mmc0 no matter which host probes first (dw_mmc
+	 * probes asynchronously): root= names /dev/mmcblk0p32.
+	 */
+	aliases {
+		mmc0 = &mmc_0;
+		mmc1 = &mmc_2;
+	};
+
 	chosen {
 		#address-cells = <2>;
 		#size-cells = <1>;
@@ -424,6 +433,22 @@
 		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
 	};
 
+	/* microSD card detect, low with a card in; pulled up on the board. */
+	sd2_cd: sd2-cd-pins {
+		samsung,pins = "gpa0-7";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+};
+
+/* The a40 runs the SD data lines at a weaker drive than the SoC default. */
+&sd2_bus1 {
+	samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
+};
+
+&sd2_bus4 {
+	samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
 };
 
 &oscclk {
@@ -448,6 +473,29 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&sd0_clk_fast_slew_rate_3x &sd0_cmd &sd0_rdqs
 		     &sd0_bus1 &sd0_bus4 &sd0_bus8>;
+};
+
+/* microSD slot (hybrid SIM/SD tray); both rails are off until we turn them on. */
+&mmc_2 {
+	status = "okay";
+	bus-width = <4>;
+	cap-sd-highspeed;
+	sd-uhs-sdr12;
+	sd-uhs-sdr25;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
+	vmmc-supply = <&ldo35_reg>;
+	vqmmc-supply = <&ldo2_reg>;
+	cd-gpios = <&gpa0 7 GPIO_ACTIVE_LOW>;
+	disable-wp;
+	card-detect-delay = <200>;
+	clock-frequency = <800000000>;
+	samsung,dw-mshc-ciu-div = <3>;
+	samsung,dw-mshc-sdr-timing = <0 2>;
+	samsung,dw-mshc-ddr-timing = <1 2>;
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&sd2_clk &sd2_cmd &sd2_bus1 &sd2_bus4 &sd2_cd>;
 };
 
 &usbdrd {
@@ -667,10 +715,10 @@
 		regulators {
 			/*
 			 * Per-rail constraints derived from a live PMIC dump.
-			 * No rail carries a voltage range, so the core never
-			 * calls set_voltage(): BUCK1-6 are ACPM/DVFS-owned (the
-			 * live voltage is not in the register the descriptor
-			 * reads) and the rest are left at their boot voltage.
+			 * Only the microSD rails (vmmc, vqmmc) carry a voltage
+			 * range, so the core never calls set_voltage() on any
+			 * other rail: BUCK1-6 are ACPM/DVFS-owned and the rest
+			 * are left at their boot voltage.
 			 * regulator-always-on is set on the rails the dump showed
 			 * enabled. The s2mpu08 driver makes BUCK enable a no-op
 			 * (ACPM owns the bucks on mainline), so always-on on a
@@ -722,8 +770,11 @@
 				regulator-always-on;
 			};
 
+			/* microSD I/O: 3.3V, or 1.8V for UHS-I */
 			ldo2_reg: LDO2 {
 				regulator-name = "vqmmc";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3375000>;
 			};
 
 			ldo3_reg: LDO3 {
@@ -794,8 +845,11 @@
 				regulator-name = "vdd_ldo34";
 			};
 
+			/* microSD card power */
 			ldo35_reg: LDO35 {
 				regulator-name = "vmmc";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3000000>;
 			};
 
 			ldo36_reg: LDO36 {
