@@ -525,6 +525,25 @@
 	 * drivers/misc/samsung/cp_pmu_probe/. No IP block of its own --
 	 * it only touches the shared PMU_ALIVE syscon above, so no `reg`.
 	 */
+	/*
+	 * Shannon modem (CP). Firmware: the raw "radio" partition, then
+	 * nv_data.bin from efs. Mailbox doorbell 0 carries messages both
+	 * ways (stock DT: int_ap2cp_msg = irq_cp2ap_msg = 0), doorbell 1
+	 * wakes the CP (int_ap2cp_wakeup). sys-rev and
+	 * ds-det go into the AP status word the CP reads at boot.
+	 */
+	modem: remoteproc-cp {
+		compatible = "samsung,exynos7885-cp";
+		memory-region = <&modem_rmem>;
+		samsung,syscon-phandle = <&pmu_system_controller>;
+		mboxes = <&mailbox_cp 0>, <&mailbox_cp 1>;
+		mbox-names = "msg", "wakeup";
+		firmware-name = "samsung/a40/modem.bin",
+				"samsung/a40/nv_data.bin";
+		samsung,sys-rev = <4>;
+		samsung,ds-det = <0>;
+	};
+
 	cp_pmu_probe: cp-pmu-probe {
 		compatible = "samsung,exynos7885-cp-pmu-probe";
 		samsung,syscon-phandle = <&pmu_system_controller>;

@@ -139,6 +139,19 @@ config DA8XX_REMOTEPROC
 	  It's safe to say n here if you're not interested in multimedia
 	  offloading.
 
+config EXYNOS_CP_REMOTEPROC
+	tristate "Samsung Exynos7885 modem (CP) remoteproc support"
+	depends on ARCH_EXYNOS || COMPILE_TEST
+	depends on ARM64 && HAVE_ARM_SMCCC
+	depends on EXYNOS_MCU_IPC
+	depends on SAMSUNG_SBD
+	select MFD_SYSCON
+	help
+	  Say y or m here to boot the Shannon modem (CP) of Exynos7885
+	  SoCs: load the radio image and NV data into the CP carve-out,
+	  secure-boot it through EL3, power the CP on and run the
+	  bootloader handshake, then bring up the SBD link to it.
+
 config KEYSTONE_REMOTEPROC
 	tristate "Keystone Remoteproc support"
 	depends on ARCH_KEYSTONE
