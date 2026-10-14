@@ -22,14 +22,27 @@
  * downlink ring is only drained while its port is open, so the shared
  * ring itself buffers what the CP sends before a daemon opens the port.
  *
+ * Packet data (downstream's rmnet0-7 over multipdp / multipdp_hiprio) is
+ * different: a slot holds one raw IP packet with no SIPC5 header
+ * (ATTR_NO_LINK_HEADER in the stock DT), and the slot's size word carries
+ * the PDP channel in bits 16-23, 0x0a + n for rmnetN. Those become WWAN
+ * network links, link id n for channel 0x0a + n; libsamsung-ipc pairs
+ * rmnetN with PDP context n + 1. Both data rings are always drained;
+ * uplink goes to the normal-priority ring.
+ *
  * The AP owns downlink rp and uplink wp, the CP downlink wp and uplink
  * rp. The IPC memory is mapped write-combine by the modem driver.
  */
 
+#include <linux/bitfield.h>
 #include <linux/bits.h>
 #include <linux/device.h>
+#include <linux/if_arp.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/netdevice.h>
+#include <linux/rcupdate.h>
+#include <linux/rtnetlink.h>
 #include <linux/samsung-sbd.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
@@ -72,6 +85,13 @@
 #define SIPC5_CTRL_MORE		BIT(7)
 #define SIPC5_CTRL_ID		GENMASK(6, 0)
 
+/* packet data: rmnet0-7 are PDP channels 0x0a-0x11 */
+#define SBD_PS_CH_FIRST		0x0a
+#define SBD_PS_LINKS		8
+#define SBD_PS_SIZE_LEN		GENMASK(15, 0)
+#define SBD_PS_SIZE_CH		GENMASK(23, 16)
+#define SBD_PS_TX_RETRY_MS	10
+
 /* shared descriptors, include/sbd.h downstream */
 struct sbd_rb_desc {
 	__le16 ch;
@@ -110,7 +130,8 @@ struct sbd_chan_info {
 	u8 ch;
 	u16 ul_len, ul_size;
 	u16 dl_len, dl_size;
-	int port_type;		/* -1: no port yet */
+	int port_type;		/* -1: no port */
+	bool ps;		/* packet data, see the top of the file */
 };
 
 static const struct sbd_chan_info sbd_channels[] = {
@@ -121,9 +142,12 @@ static const struct sbd_chan_info sbd_channels[] = {
 	{ "umts_csd",        0x01,  32, SZ_2K,   64, SZ_2K, -1 },
 	{ "umts_router",     0x19,  16, SZ_2K,   16, SZ_2K, -1 },
 	{ "umts_dm0",        0x1c,  16, SZ_2K,  128, SZ_2K, -1 },
-	{ "multipdp_hiprio", 0x0a, 256, SZ_2K,  256, SZ_2K, -1 },
-	{ "multipdp",        0x0b, 512, SZ_2K, 1024, SZ_2K, -1 },
+	{ "multipdp_hiprio", 0x0a, 256, SZ_2K,  256, SZ_2K, -1, true },
+	{ "multipdp",        0x0b, 512, SZ_2K, 1024, SZ_2K, -1, true },
 };
+
+/* the uplink ring for packet data, downstream's QOS_NORMAL */
+#define SBD_PS_TX_CHAN		8
 
 #define SBD_NUM_CHANNELS	ARRAY_SIZE(sbd_channels)
 
@@ -172,6 +196,18 @@ struct sbd_link {
 #define SBD_CTRL_PHONE_START	0
 
 	wait_queue_head_t tx_wq;
+
+	/* packet data links, by link id; RCU for the RX path */
+	struct net_device __rcu *netdevs[SBD_PS_LINKS];
+	spinlock_t ps_tx_lock;		/* the uplink ring, across links */
+	struct work_struct ps_kick_work;	/* uplink doorbell, may sleep */
+	struct delayed_work ps_wake_work;	/* uplink ring full: retry */
+	bool wwan_ops;
+};
+
+struct sbd_netdev {
+	struct sbd_link *link;
+	u32 if_id;
 };
 
 static u16 sbd_r16(struct sbd_link *link, u32 off)
@@ -408,6 +444,92 @@ static void sbd_rx_chan(struct sbd_chan *chan)
 	}
 }
 
+/* one downlink packet: a raw IP packet for the link its channel names */
+static void sbd_rx_packet(struct sbd_link *link, u32 addr, u32 word)
+{
+	const u8 *data = link->ipc + addr;
+	unsigned int len = FIELD_GET(SBD_PS_SIZE_LEN, word);
+	unsigned int id = FIELD_GET(SBD_PS_SIZE_CH, word) - SBD_PS_CH_FIRST;
+	struct net_device *ndev;
+	struct sk_buff *skb;
+	__be16 proto;
+
+	if (!len)
+		return;
+
+	switch (data[0] >> 4) {
+	case 4:
+		proto = htons(ETH_P_IP);
+		break;
+	case 6:
+		proto = htons(ETH_P_IPV6);
+		break;
+	default:
+		proto = 0;
+	}
+
+	rcu_read_lock();
+	ndev = id < SBD_PS_LINKS ? rcu_dereference(link->netdevs[id]) : NULL;
+	if (!ndev) {
+		dev_dbg_ratelimited(link->dev, "packet for PDP channel 0x%02lx, no link\n",
+				    FIELD_GET(SBD_PS_SIZE_CH, word));
+		goto out;
+	}
+	if (!proto) {
+		DEV_STATS_INC(ndev, rx_errors);
+		goto out;
+	}
+
+	skb = netdev_alloc_skb(ndev, len);
+	if (!skb) {
+		DEV_STATS_INC(ndev, rx_dropped);
+		goto out;
+	}
+	skb_put_data(skb, data, len);
+	skb->protocol = proto;
+	skb_reset_network_header(skb);
+
+	dev_sw_netstats_rx_add(ndev, len);
+	netif_rx(skb);
+out:
+	rcu_read_unlock();
+}
+
+static void sbd_rx_ps(struct sbd_chan *chan)
+{
+	struct sbd_link *link = chan->link;
+	struct sbd_ring *ring = &chan->ring[SBD_DL];
+	u16 rp, wp;
+
+	for (;;) {
+		u32 addr, word;
+
+		rp = sbd_r16(link, ring->rp);
+		wp = sbd_r16(link, ring->wp);
+		if (rp == wp)
+			return;
+
+		if (rp >= ring->len || wp >= ring->len) {
+			dev_err_ratelimited(link->dev, "%s: DL rp/wp %u/%u out of range\n",
+					    chan->info->name, rp, wp);
+			return;
+		}
+
+		rmb();	/* wp before the slot it covers */
+		addr = sbd_r32(link, ring->addr_v + 4 * rp);
+		word = sbd_r32(link, ring->size_v + 4 * rp);
+		if (FIELD_GET(SBD_PS_SIZE_LEN, word) > ring->size ||
+		    addr + ring->size > link->ipc_size)
+			dev_err_ratelimited(link->dev, "%s: DL slot %u: 0x%x size 0x%x\n",
+					    chan->info->name, rp, addr, word);
+		else
+			sbd_rx_packet(link, addr, word);
+
+		mb();	/* done with the slot before handing it back */
+		sbd_w16(link, ring->rp, (rp + 1) % ring->len);
+	}
+}
+
 static void sbd_rx_work(struct work_struct *work)
 {
 	struct sbd_link *link = container_of(work, struct sbd_link, rx_work);
@@ -416,7 +538,11 @@ static void sbd_rx_work(struct work_struct *work)
 	for (i = 0; i < SBD_NUM_CHANNELS; i++) {
 		struct sbd_chan *chan = &link->chans[i];
 
-		if (READ_ONCE(link->active) && READ_ONCE(chan->open))
+		if (!READ_ONCE(link->active))
+			break;
+		if (chan->info->ps)
+			sbd_rx_ps(chan);
+		else if (READ_ONCE(chan->open))
 			sbd_rx_chan(chan);
 	}
 
@@ -643,6 +769,182 @@ static const struct wwan_port_ops sbd_port_ops = {
 	.tx_blocking = sbd_port_tx_blocking,
 };
 
+/* ---- packet data: WWAN network links ---- */
+
+static void sbd_ps_kick_work(struct work_struct *work)
+{
+	struct sbd_link *link = container_of(work, struct sbd_link,
+					     ps_kick_work);
+
+	if (sbd_link_is_active(link))
+		link->ops->send_msg(link->ctx, SBD_MSG_SEND_DATA);
+}
+
+static void sbd_ps_wake_queues(struct sbd_link *link)
+{
+	struct net_device *ndev;
+	int i;
+
+	rcu_read_lock();
+	for (i = 0; i < SBD_PS_LINKS; i++) {
+		ndev = rcu_dereference(link->netdevs[i]);
+		if (ndev && netif_running(ndev))
+			netif_wake_queue(ndev);
+	}
+	rcu_read_unlock();
+}
+
+/*
+ * The CP does not signal uplink consumption, so a full ring is retried
+ * on a timer; the queues are woken once there is room again.
+ */
+static void sbd_ps_wake_work(struct work_struct *work)
+{
+	struct sbd_link *link = container_of(to_delayed_work(work),
+					     struct sbd_link, ps_wake_work);
+	struct sbd_chan *chan = &link->chans[SBD_PS_TX_CHAN];
+
+	if (!sbd_link_is_active(link))
+		return;
+
+	if (sbd_ul_free(chan))
+		sbd_ps_wake_queues(link);
+	else
+		schedule_delayed_work(&link->ps_wake_work,
+				      msecs_to_jiffies(SBD_PS_TX_RETRY_MS));
+}
+
+static netdev_tx_t sbd_ndo_start_xmit(struct sk_buff *skb,
+				      struct net_device *ndev)
+{
+	struct sbd_netdev *priv = wwan_netdev_drvpriv(ndev);
+	struct sbd_link *link = priv->link;
+	struct sbd_chan *chan = &link->chans[SBD_PS_TX_CHAN];
+	struct sbd_ring *ring = &chan->ring[SBD_UL];
+	unsigned int len = skb->len;
+	u32 addr;
+	u16 wp;
+
+	if (!sbd_link_is_active(link) || len > ring->size) {
+		DEV_STATS_INC(ndev, tx_dropped);
+		dev_kfree_skb_any(skb);
+		return NETDEV_TX_OK;
+	}
+
+	spin_lock(&link->ps_tx_lock);
+
+	if (!sbd_ul_free(chan)) {
+		spin_unlock(&link->ps_tx_lock);
+		netif_stop_queue(ndev);
+		schedule_delayed_work(&link->ps_wake_work,
+				      msecs_to_jiffies(SBD_PS_TX_RETRY_MS));
+		return NETDEV_TX_BUSY;
+	}
+
+	wp = sbd_r16(link, ring->wp);
+	addr = sbd_r32(link, ring->addr_v + 4 * wp);
+	if (addr + ring->size > link->ipc_size) {
+		spin_unlock(&link->ps_tx_lock);
+		DEV_STATS_INC(ndev, tx_errors);
+		dev_kfree_skb_any(skb);
+		return NETDEV_TX_OK;
+	}
+
+	skb_copy_bits(skb, 0, link->ipc + addr, len);
+	sbd_w32(link, ring->size_v + 4 * wp,
+		FIELD_PREP(SBD_PS_SIZE_LEN, len) |
+		FIELD_PREP(SBD_PS_SIZE_CH, SBD_PS_CH_FIRST + priv->if_id));
+	wmb();	/* the packet before wp */
+	sbd_w16(link, ring->wp, (wp + 1) % ring->len);
+
+	spin_unlock(&link->ps_tx_lock);
+
+	dev_sw_netstats_tx_add(ndev, 1, len);
+	dev_consume_skb_any(skb);
+
+	queue_work(system_highpri_wq, &link->ps_kick_work);
+
+	return NETDEV_TX_OK;
+}
+
+static int sbd_ndo_open(struct net_device *ndev)
+{
+	netif_start_queue(ndev);
+
+	return 0;
+}
+
+static int sbd_ndo_stop(struct net_device *ndev)
+{
+	netif_stop_queue(ndev);
+
+	return 0;
+}
+
+static const struct net_device_ops sbd_netdev_ops = {
+	.ndo_open = sbd_ndo_open,
+	.ndo_stop = sbd_ndo_stop,
+	.ndo_start_xmit = sbd_ndo_start_xmit,
+};
+
+static void sbd_netdev_setup(struct net_device *ndev)
+{
+	ndev->netdev_ops = &sbd_netdev_ops;
+	ndev->type = ARPHRD_RAWIP;
+	ndev->flags = IFF_POINTOPOINT | IFF_NOARP;
+	ndev->hard_header_len = 0;
+	ndev->addr_len = 0;
+	ndev->mtu = ETH_DATA_LEN;
+	ndev->min_mtu = ETH_MIN_MTU;
+	ndev->max_mtu = SZ_2K;		/* one slot, no header */
+	ndev->tx_queue_len = 1000;
+	ndev->needs_free_netdev = true;
+	ndev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
+}
+
+static int sbd_wwan_newlink(void *ctxt, struct net_device *ndev, u32 if_id,
+			    struct netlink_ext_ack *extack)
+{
+	struct sbd_netdev *priv = wwan_netdev_drvpriv(ndev);
+	struct sbd_link *link = ctxt;
+	int ret;
+
+	if (if_id >= SBD_PS_LINKS) {
+		NL_SET_ERR_MSG_MOD(extack, "link id 0-7 (rmnet0-7)");
+		return -EINVAL;
+	}
+	if (rtnl_dereference(link->netdevs[if_id]))
+		return -EBUSY;
+
+	priv->link = link;
+	priv->if_id = if_id;
+
+	ret = register_netdevice(ndev);
+	if (ret)
+		return ret;
+
+	rcu_assign_pointer(link->netdevs[if_id], ndev);
+
+	return 0;
+}
+
+static void sbd_wwan_dellink(void *ctxt, struct net_device *ndev,
+			     struct list_head *head)
+{
+	struct sbd_netdev *priv = wwan_netdev_drvpriv(ndev);
+	struct sbd_link *link = ctxt;
+
+	RCU_INIT_POINTER(link->netdevs[priv->if_id], NULL);
+	unregister_netdevice_queue(ndev, head);
+}
+
+static const struct wwan_ops sbd_wwan_ops = {
+	.priv_size = sizeof(struct sbd_netdev),
+	.setup = sbd_netdev_setup,
+	.newlink = sbd_wwan_newlink,
+	.dellink = sbd_wwan_dellink,
+};
+
 /**
  * sbd_link_start() - bring the link up
  * @link: the link
@@ -671,6 +973,8 @@ void sbd_link_stop(struct sbd_link *link)
 	wake_up(&link->tx_wq);
 	cancel_work_sync(&link->ctrl_work);
 	cancel_work_sync(&link->rx_work);
+	cancel_work_sync(&link->ps_kick_work);
+	cancel_delayed_work_sync(&link->ps_wake_work);
 }
 EXPORT_SYMBOL_GPL(sbd_link_stop);
 
@@ -704,6 +1008,9 @@ struct sbd_link *sbd_link_create(struct device *dev, void *ipc,
 	INIT_WORK(&link->rx_work, sbd_rx_work);
 	INIT_WORK(&link->ctrl_work, sbd_ctrl_work);
 	init_waitqueue_head(&link->tx_wq);
+	spin_lock_init(&link->ps_tx_lock);
+	INIT_WORK(&link->ps_kick_work, sbd_ps_kick_work);
+	INIT_DELAYED_WORK(&link->ps_wake_work, sbd_ps_wake_work);
 
 	for (i = 0; i < SBD_NUM_CHANNELS; i++) {
 		link->chans[i].link = link;
@@ -733,6 +1040,14 @@ struct sbd_link *sbd_link_create(struct device *dev, void *ipc,
 		chan->port = port;
 	}
 
+	/* link 0 (rmnet0, PDP context 1) is created as wwan0 right away */
+	ret = wwan_register_ops(dev, &sbd_wwan_ops, link, 0);
+	if (ret) {
+		dev_err(dev, "failed to register the network links: %d\n", ret);
+		goto err_ports;
+	}
+	link->wwan_ops = true;
+
 	return link;
 
 err_ports:
@@ -751,6 +1066,9 @@ void sbd_link_destroy(struct sbd_link *link)
 	int i;
 
 	sbd_link_stop(link);
+
+	if (link->wwan_ops)
+		wwan_unregister_ops(link->dev);
 
 	for (i = 0; i < SBD_NUM_CHANNELS; i++) {
 		if (link->chans[i].port)
