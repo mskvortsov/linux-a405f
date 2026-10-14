@@ -506,7 +506,9 @@
 	 * the same syscon phandle WLBT uses above (GNSS_CTRL_NS/S at PMU
 	 * offsets 0x40/0x44). "active"/"watchdog"/"mbox" match the
 	 * downstream gnss_pdata/mailbox_gnss nodes' interrupt-names;
-	 * "wakeup" isn't wired up yet.
+	 * "wakeup" isn't wired up yet. The core needs the CP running (its
+	 * RF clock is the CP's), hence samsung,modem, and votes for the
+	 * regulator they share.
 	 */
 	gnss_kepler: gnss@120d0000 {
 		compatible = "samsung,exynos7885-gnss-kepler";
@@ -517,6 +519,8 @@
 		interrupt-names = "active", "watchdog", "mbox";
 		samsung,syscon-phandle = <&pmu_system_controller>;
 		memory-region = <&gnss_rmem>;
+		shared-supply = <&cp_shared_reg>;
+		samsung,modem = <&modem>;
 		status = "okay";
 	};
 
@@ -538,6 +542,7 @@
 		samsung,syscon-phandle = <&pmu_system_controller>;
 		mboxes = <&mailbox_cp 0>, <&mailbox_cp 1>;
 		mbox-names = "msg", "wakeup";
+		shared-supply = <&cp_shared_reg>;
 		firmware-name = "samsung/a40/modem.bin",
 				"samsung/a40/nv_data.bin";
 		samsung,sys-rev = <4>;

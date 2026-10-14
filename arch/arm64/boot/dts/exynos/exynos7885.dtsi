@@ -306,12 +306,20 @@
 			#mbox-cells = <0>;
 		};
 
-		/* AP <-> modem (CP) mailbox, MCU_IPC */
+		/*
+		 * AP <-> modem (CP) mailbox, MCU_IPC. Also the vote for the
+		 * external regulator the CP shares with the GNSS core.
+		 */
 		mailbox_cp: mailbox@12080000 {
 			compatible = "samsung,exynos7885-mcu-ipc";
 			reg = <0x12080000 0x180>;
 			interrupts = <GIC_SPI 55 IRQ_TYPE_LEVEL_HIGH>;
 			#mbox-cells = <1>;
+			samsung,pmu-syscon = <&pmu_system_controller>;
+
+			cp_shared_reg: regulator {
+				regulator-name = "cp-shared";
+			};
 		};
 
 		tmu: tmu@10070000 {
