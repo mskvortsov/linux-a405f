@@ -626,8 +626,8 @@
 		};
 
 		mmc_2: mmc@13550000 {
-			compatible = "samsung,exynos7885-dw-mshc-smu",
-				     "samsung,exynos7-dw-mshc-smu";
+			compatible = "samsung,exynos7885-dw-mshc",
+				     "samsung,exynos7-dw-mshc";
 			reg = <0x13550000 0x2000>;
 			interrupts = <GIC_SPI 147 IRQ_TYPE_LEVEL_HIGH>;
 			#address-cells = <1>;
