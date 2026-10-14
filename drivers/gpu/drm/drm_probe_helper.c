@@ -784,6 +784,17 @@ static void output_poll_execute(struct work_struct *work)
 	}
 
 	if (!mutex_trylock(&dev->mode_config.mutex)) {
+		/*
+		 * A probe that just changed a connector's status queues this
+		 * work with no delay while it still holds mode_config.mutex,
+		 * so the trylock is expected to fail right then. Deliver that
+		 * event now rather than a full poll period later.
+		 */
+		if (dev->mode_config.delayed_event) {
+			dev->mode_config.delayed_event = false;
+			drm_kms_helper_hotplug_event(dev);
+		}
+
 		schedule_delayed_work(delayed_work, DRM_OUTPUT_POLL_PERIOD);
 		return;
 	}
