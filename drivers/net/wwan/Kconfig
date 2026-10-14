@@ -106,6 +106,13 @@ config IOSM
 
 	  If unsure, say N.
 
+config SAMSUNG_SBD
+	tristate "Samsung SBD shared-memory link"
+	help
+	  The shared-memory IPC link (SBD) to the Shannon modem of Samsung
+	  Exynos SoCs, used by its remoteproc driver. Its IPC and RFS
+	  channels are WWAN ports.
+
 config MTK_T7XX
 	tristate "MediaTek PCIe 5G WWAN modem T7xx device"
 	depends on PCI
