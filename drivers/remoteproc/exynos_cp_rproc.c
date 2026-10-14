@@ -46,6 +46,7 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
 #include <linux/remoteproc.h>
 #include <linux/samsung-sbd.h>
 #include <linux/sizes.h>
@@ -94,9 +95,6 @@ static const char * const cp_smc_err_string[] = {
 #define CP_DISABLE_ISO_SYS_PWR_REG	0x1330
 #define CP_RESET_ISO_SYS_PWR_REG	0x1334
 #define CP_DUMP_PC_SYS_PWR_REG		0x1338
-#define EXT_REGULATOR_SHARED_STATUS	0x3644
-#define EXT_REGULATOR_SHARED_OPTION	0x3648
-#define EXT_REGULATOR_SHARED_ENABLE	BIT(2)
 
 #define CP_PWRON			BIT(1)
 #define CP_START			BIT(3)
@@ -186,6 +184,8 @@ struct exynos_cp {
 
 	struct regmap *pmu;
 	struct regmap *mbox_regs;
+	struct regulator *shared_reg;
+	bool shared_reg_kept;
 	struct mbox_client mbox_cl;
 	struct mbox_chan *mbox_msg;
 	struct mbox_client mbox_wakeup_cl;
@@ -272,22 +272,22 @@ static int cp_ctrl_update_bits(struct exynos_cp *cp, unsigned long reg,
 /*
  * exynos_pmu_shared_reg_enable()/_disable() from downstream mcu_ipc.c:
  * the regulator shared with the GNSS and WLBT cores, plus the CP_WAKEUP
- * bit. Not refcounted against gnss_kepler yet.
+ * bit. The mailbox provides it as a regulator, so the vote is counted
+ * against gnss_kepler's.
  */
-static void cp_shared_reg_enable(struct exynos_cp *cp)
+static int cp_shared_reg_enable(struct exynos_cp *cp)
 {
-	regmap_set_bits(cp->mbox_regs, EXYNOS_MCU_IPC_ISSR(MBX_AP2CP_STATUS),
-			AP2CP_CP_WAKEUP);
-	regmap_set_bits(cp->pmu, EXT_REGULATOR_SHARED_OPTION,
-			EXT_REGULATOR_SHARED_ENABLE);
+	int ret = regulator_enable(cp->shared_reg);
+
+	if (ret)
+		dev_err(cp->dev, "shared regulator: %d\n", ret);
+
+	return ret;
 }
 
 static void cp_shared_reg_disable(struct exynos_cp *cp)
 {
-	regmap_clear_bits(cp->pmu, EXT_REGULATOR_SHARED_OPTION,
-			  EXT_REGULATOR_SHARED_ENABLE);
-	regmap_clear_bits(cp->mbox_regs, EXYNOS_MCU_IPC_ISSR(MBX_AP2CP_STATUS),
-			  AP2CP_CP_WAKEUP);
+	regulator_disable(cp->shared_reg);
 }
 
 /*
@@ -300,7 +300,8 @@ static bool cp_already_booted(struct exynos_cp *cp)
 	u32 val;
 	int ret;
 
-	cp_shared_reg_enable(cp);
+	if (cp_shared_reg_enable(cp))
+		return true;
 	ret = cp_ctrl_read(cp, CP_SMC_REG_CTRL_NS, &val);
 	cp_shared_reg_disable(cp);
 
@@ -360,7 +361,9 @@ static int cp_power_on(struct exynos_cp *cp)
 	u32 val;
 	int ret;
 
-	cp_shared_reg_enable(cp);
+	ret = cp_shared_reg_enable(cp);
+	if (ret)
+		return ret;
 
 	regmap_read(cp->pmu, RESET_SEQUENCER_STATUS, &val);
 	if ((val & CP_RESET_SEQ_STAT_MASK) == CP_RESET_SEQ_STAT_DONE) {
@@ -548,7 +551,10 @@ static void exynos_cp_send_msg(void *ctx, u32 msg)
 
 	mutex_lock(&cp->msg_lock);
 
-	cp_shared_reg_enable(cp);
+	if (cp_shared_reg_enable(cp)) {
+		mutex_unlock(&cp->msg_lock);
+		return;
+	}
 	regmap_read(cp->mbox_regs, EXYNOS_MCU_IPC_ISSR(MBX_CP2AP_STATUS),
 		    &status);
 
@@ -599,13 +605,17 @@ static int exynos_cp_start(struct rproc *rproc)
 	/*
 	 * init_mailbox_regs(): all shared registers cleared, then the AP
 	 * status word. ap_status = 1 is what the CP bootloader waits for.
+	 * CP_WAKEUP belongs to the shared regulator, whose other users may
+	 * hold it: leave it alone.
 	 */
 	for (n = 0; n < EXYNOS_MCU_IPC_NUM_ISSR; n++)
-		regmap_write(cp->mbox_regs, EXYNOS_MCU_IPC_ISSR(n), 0);
-	regmap_write(cp->mbox_regs, EXYNOS_MCU_IPC_ISSR(MBX_AP2CP_STATUS),
-		     FIELD_PREP(AP2CP_AP_STATUS, 1) | AP2CP_PDA_ACTIVE |
-		     FIELD_PREP(AP2CP_SYS_REV, cp->sys_rev) |
-		     FIELD_PREP(AP2CP_DS_DET, cp->ds_det));
+		if (n != MBX_AP2CP_STATUS)
+			regmap_write(cp->mbox_regs, EXYNOS_MCU_IPC_ISSR(n), 0);
+	regmap_update_bits(cp->mbox_regs, EXYNOS_MCU_IPC_ISSR(MBX_AP2CP_STATUS),
+			   (u32)~AP2CP_CP_WAKEUP,
+			   FIELD_PREP(AP2CP_AP_STATUS, 1) | AP2CP_PDA_ACTIVE |
+			   FIELD_PREP(AP2CP_SYS_REV, cp->sys_rev) |
+			   FIELD_PREP(AP2CP_DS_DET, cp->ds_det));
 
 	/*
 	 * The bootloader reads the magic as soon as it runs, so it has to be
@@ -696,7 +706,7 @@ static void cp_dump_power(struct exynos_cp *cp, const char *when)
 /*
  * Take a running CP down the way downstream's ss310ap_reset() does: wake
  * it, then cp_reset_assert[] with the shared regulator on. Downstream
- * leaves the regulator on afterwards; so does this.
+ * leaves the regulator on afterwards; so does this, by keeping one vote.
  */
 static int exynos_cp_power_down(struct exynos_cp *cp)
 {
@@ -704,7 +714,12 @@ static int exynos_cp_power_down(struct exynos_cp *cp)
 
 	sbd_link_stop(cp->link);
 
-	cp_shared_reg_enable(cp);
+	if (!cp->shared_reg_kept) {
+		ret = cp_shared_reg_enable(cp);
+		if (ret)
+			return ret;
+		cp->shared_reg_kept = true;
+	}
 	cp_dump_power(cp, "before power-down");
 
 	if (cp->mbox_wakeup) {
@@ -946,6 +961,15 @@ static void exynos_cp_unmap_ipc(void *va)
 	vunmap(va);
 }
 
+/* the vote power-down keeps (see exynos_cp_power_down()) */
+static void exynos_cp_drop_kept_vote(void *data)
+{
+	struct exynos_cp *cp = data;
+
+	if (cp->shared_reg_kept)
+		cp_shared_reg_disable(cp);
+}
+
 static void exynos_cp_free_mbox(void *chan)
 {
 	mbox_free_channel(chan);
@@ -1012,6 +1036,15 @@ static int exynos_cp_probe(struct platform_device *pdev)
 	cp->pmu = syscon_regmap_lookup_by_phandle(np, "samsung,syscon-phandle");
 	if (IS_ERR(cp->pmu))
 		return dev_err_probe(dev, PTR_ERR(cp->pmu), "no PMU syscon\n");
+
+	cp->shared_reg = devm_regulator_get(dev, "shared");
+	if (IS_ERR(cp->shared_reg))
+		return dev_err_probe(dev, PTR_ERR(cp->shared_reg),
+				     "no shared regulator\n");
+	/* runs before the regulator is put: devm actions unwind in reverse */
+	ret = devm_add_action_or_reset(dev, exynos_cp_drop_kept_vote, cp);
+	if (ret)
+		return ret;
 
 	/* the mailbox's shared registers: a syscon on the mailbox node */
 	ret = of_parse_phandle_with_args(np, "mboxes", "#mbox-cells", 0, &args);
