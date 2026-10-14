@@ -55,6 +55,17 @@
 		};
 
 		/*
+		 * S-Boot's RAM log: "LOGM" magic at 0x91200204, ring buffer
+		 * 0x91300000-0x91500000. U-Boot does not load anything there,
+		 * so keeping Linux off it preserves this boot's bootloader log
+		 * for reading through /dev/mem.
+		 */
+		sboot_log_rmem: sboot-log@91200000 {
+			reg = <0x0 0x91200000 0x300000>;
+			no-map;
+		};
+
+		/*
 		 * Exynos Snapshot (ESS / debug-snapshot). Downstream passes
 		 * ess_setup=0x86000000 on the cmdline; the ess driver then
 		 * memblock_reserve()s a block sized by its item table (up to
