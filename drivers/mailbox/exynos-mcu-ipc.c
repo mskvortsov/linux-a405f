@@ -18,6 +18,13 @@
  *
  * Doorbells carry no data and need no acknowledgement, so the controller
  * has no TX-done mechanism: clients set knows_txdone.
+ *
+ * With a "regulator" child node, the block also provides the vote that
+ * keeps the external regulator shared by the CP, GNSS and WLBT cores up
+ * (downstream exynos_pmu_shared_reg_enable()/_disable()): the CP_WAKEUP
+ * bit in AP2CP status (ISSR2 bit 0) plus the PMU's
+ * EXT_REGULATOR_SHARED_OPTION. As a regulator its users get the
+ * reference count downstream keeps in shared_reg_usage_cnt.
  */
 
 #include <linux/bits.h>
@@ -29,11 +36,20 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/of_regulator.h>
 
 #define MCU_IPC_INTCR0		0x0c	/* clear CP->AP pending, bits 31:16 */
 #define MCU_IPC_INTMR0		0x10	/* mask CP->AP, bits 31:16 */
 #define MCU_IPC_INTSR0		0x14	/* CP->AP status, bits 31:16 */
 #define MCU_IPC_INTGR1		0x1c	/* raise AP->CP, bits 15:0 */
+
+#define MCU_IPC_AP2CP_STATUS	EXYNOS_MCU_IPC_ISSR(2)
+#define MCU_IPC_CP_WAKEUP	BIT(0)
+
+/* PMU_ALIVE */
+#define EXT_REGULATOR_SHARED_OPTION	0x3648
+#define EXT_REGULATOR_SHARED_ENABLE	BIT(2)
 
 #define MCU_IPC_NUM_CHANS	16
 #define MCU_IPC_RX_SHIFT	16
@@ -43,6 +59,7 @@ struct exynos_mcu_ipc {
 	struct device *dev;
 	void __iomem *base;
 	struct regmap *regmap;
+	struct regmap *pmu;
 	struct mbox_controller mbox;
 	struct mbox_chan chans[MCU_IPC_NUM_CHANS];
 };
@@ -122,6 +139,87 @@ static struct mbox_chan *exynos_mcu_ipc_xlate(struct mbox_controller *mbox,
 	return &mbox->chans[sp->args[0]];
 }
 
+static int exynos_mcu_ipc_shared_enable(struct regulator_dev *rdev)
+{
+	struct exynos_mcu_ipc *ipc = rdev_get_drvdata(rdev);
+
+	regmap_set_bits(ipc->regmap, MCU_IPC_AP2CP_STATUS, MCU_IPC_CP_WAKEUP);
+
+	return regmap_set_bits(ipc->pmu, EXT_REGULATOR_SHARED_OPTION,
+			       EXT_REGULATOR_SHARED_ENABLE);
+}
+
+static int exynos_mcu_ipc_shared_disable(struct regulator_dev *rdev)
+{
+	struct exynos_mcu_ipc *ipc = rdev_get_drvdata(rdev);
+
+	regmap_clear_bits(ipc->pmu, EXT_REGULATOR_SHARED_OPTION,
+			  EXT_REGULATOR_SHARED_ENABLE);
+
+	return regmap_clear_bits(ipc->regmap, MCU_IPC_AP2CP_STATUS,
+				 MCU_IPC_CP_WAKEUP);
+}
+
+static int exynos_mcu_ipc_shared_is_enabled(struct regulator_dev *rdev)
+{
+	struct exynos_mcu_ipc *ipc = rdev_get_drvdata(rdev);
+	u32 val;
+	int ret;
+
+	ret = regmap_read(ipc->pmu, EXT_REGULATOR_SHARED_OPTION, &val);
+	if (ret)
+		return ret;
+
+	return !!(val & EXT_REGULATOR_SHARED_ENABLE);
+}
+
+static const struct regulator_ops exynos_mcu_ipc_shared_ops = {
+	.enable = exynos_mcu_ipc_shared_enable,
+	.disable = exynos_mcu_ipc_shared_disable,
+	.is_enabled = exynos_mcu_ipc_shared_is_enabled,
+};
+
+static const struct regulator_desc exynos_mcu_ipc_shared_desc = {
+	.name = "shared",
+	.ops = &exynos_mcu_ipc_shared_ops,
+	.type = REGULATOR_VOLTAGE,
+	.owner = THIS_MODULE,
+};
+
+static int exynos_mcu_ipc_register_shared(struct exynos_mcu_ipc *ipc)
+{
+	struct device *dev = ipc->dev;
+	struct regulator_config cfg = { };
+	struct regulator_dev *rdev;
+	struct device_node *np;
+
+	np = of_get_child_by_name(dev->of_node, "regulator");
+	if (!np)
+		return 0;
+
+	ipc->pmu = syscon_regmap_lookup_by_phandle(dev->of_node,
+						   "samsung,pmu-syscon");
+	if (IS_ERR(ipc->pmu)) {
+		of_node_put(np);
+		return dev_err_probe(dev, PTR_ERR(ipc->pmu),
+				     "regulator needs samsung,pmu-syscon\n");
+	}
+
+	cfg.dev = dev;
+	cfg.driver_data = ipc;
+	cfg.of_node = np;
+	cfg.init_data = of_get_regulator_init_data(dev, np,
+						   &exynos_mcu_ipc_shared_desc);
+
+	rdev = devm_regulator_register(dev, &exynos_mcu_ipc_shared_desc, &cfg);
+	of_node_put(np);
+	if (IS_ERR(rdev))
+		return dev_err_probe(dev, PTR_ERR(rdev),
+				     "failed to register the shared regulator\n");
+
+	return 0;
+}
+
 static const struct regmap_config exynos_mcu_ipc_regmap_config = {
 	.reg_bits = 32,
 	.val_bits = 32,
@@ -151,6 +249,11 @@ static int exynos_mcu_ipc_probe(struct platform_device *pdev)
 	if (IS_ERR(ipc->regmap))
 		return dev_err_probe(dev, PTR_ERR(ipc->regmap),
 				     "failed to create regmap\n");
+
+	/* first: the PMU lookup can defer, the syscon below cannot be undone */
+	ret = exynos_mcu_ipc_register_shared(ipc);
+	if (ret)
+		return ret;
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)

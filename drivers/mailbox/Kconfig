@@ -69,6 +69,7 @@ config EXYNOS_MBOX
 config EXYNOS_MCU_IPC
 	bool "Exynos MCU_IPC mailbox"
 	depends on ARCH_EXYNOS || COMPILE_TEST
+	depends on REGULATOR
 	select MFD_SYSCON
 	select REGMAP_MMIO
 	help
@@ -76,6 +77,8 @@ config EXYNOS_MCU_IPC
 	  block, through which the AP talks to the Shannon modem (CP).
 	  Its 16 doorbells per direction are mailbox channels; its 64
 	  shared registers are exposed to clients as a syscon regmap.
+	  It also provides the reference-counted vote for the regulator
+	  the CP shares with the GNSS core.
 
 config IMX_MBOX
 	tristate "i.MX Mailbox"
