@@ -34,6 +34,9 @@ properties:
               - samsung,exynos8890-dw-mshc-smu
               - samsung,exynos8895-dw-mshc-smu
           - const: samsung,exynos7-dw-mshc-smu
+      - items:
+          - const: samsung,exynos7885-dw-mshc
+          - const: samsung,exynos7-dw-mshc
 
   reg:
     maxItems: 1
