@@ -20,6 +20,8 @@
  * @WWAN_PORT_ADB: ADB protocol control
  * @WWAN_PORT_MIPC: MTK MIPC diagnostic interface
  * @WWAN_PORT_NMEA: embedded GNSS receiver with NMEA output
+ * @WWAN_PORT_SIPC: Samsung IPC (FMT) control channel of Shannon modems
+ * @WWAN_PORT_SIPC_RFS: Samsung IPC remote file system channel
  *
  * @WWAN_PORT_MAX: Highest supported port types
  * @WWAN_PORT_UNKNOWN: Special value to indicate an unknown port type
@@ -36,6 +38,8 @@ enum wwan_port_type {
 	WWAN_PORT_ADB,
 	WWAN_PORT_MIPC,
 	WWAN_PORT_NMEA,
+	WWAN_PORT_SIPC,
+	WWAN_PORT_SIPC_RFS,
 
 	/* Add new port types above this line */
 
