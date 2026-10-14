@@ -42,6 +42,8 @@
 #include <linux/platform_device.h>
 #include <linux/poll.h>
 #include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
+#include <linux/remoteproc.h>
 #include <linux/seq_file.h>
 #include <linux/sizes.h>
 #include <linux/uaccess.h>
@@ -135,25 +137,21 @@
 
 /*
  * CP_STAT / EXT_REGULATOR_SHARED_{OPTION,STATUS} -- also PMU_ALIVE SFRs,
- * not gnss_if-owned ones. gnss_pmu_release_reset() (the CONFIG_GNSS_PMUCAL=n
- * branch, the one actually compiled downstream) calls
- * exynos_pmu_shared_reg_enable()/_disable() from mcu_ipc.c right around
- * the PMU sequence below -- a step this port was missing entirely. That
+ * not gnss_if-owned ones, read here for the regs dump only.
+ * gnss_pmu_release_reset() (the CONFIG_GNSS_PMUCAL=n branch, the one
+ * actually compiled downstream) calls exynos_pmu_shared_reg_enable()/
+ * _disable() from mcu_ipc.c right around the PMU sequence below. That
  * function sets EXT_REGULATOR_SHARED_OPTION bit 2 *and* a CP_WAKEUP
  * request bit in the CP mailbox's own ISSR2 (a separate IP block at
- * 0x12080000, DT node `mailbox_cp` downstream -- distinct from the GNSS
- * mailbox at 0x120d0000 this driver already maps), i.e. GNSS asks CP's
- * firmware to keep a shared regulator up for the duration of the PMU
- * release-reset sequence. See gnss.md.
+ * 0x12080000 -- distinct from the GNSS mailbox at 0x120d0000 this driver
+ * maps), i.e. GNSS asks CP's firmware to keep a shared regulator up for
+ * the duration of the PMU release-reset sequence. See gnss.md. The CP
+ * mailbox driver provides that vote as the "shared" regulator, counted
+ * against the CP driver's own.
  */
 #define EXT_REGULATOR_SHARED_STATUS	0x3644
 #define EXT_REGULATOR_SHARED_OPTION	0x3648
-#define EXT_REGULATOR_SHARED_ENABLE	BIT(2)
 #define CP_STAT				0x0038
-
-#define CP_MBOX_PHYS_BASE	0x12080000
-#define CP_MBOX_SIZE		0x180
-#define CP_WAKEUP_REQ		BIT(0)
 
 /*
  * Fault region: offset 0x200000 into the reserved memory-region, DT
@@ -337,9 +335,18 @@ struct gnss_kepler {
 	struct regmap *pmureg;
 	void __iomem *dram;
 	void __iomem *mbox;
-	void __iomem *cp_mbox;
 	bool bcmd_keep_loop;
 	bool hold_shared_reg;
+	/*
+	 * The shared-regulator vote and the modem's power reference, each
+	 * held at most once; power_lock protects both flags.
+	 */
+	struct mutex power_lock;
+	struct regulator *shared_reg;
+	bool shared_reg_on;
+	struct rproc *modem;		/* NULL without samsung,modem */
+	bool modem_held;
+	bool need_modem;
 	bool load_fw_autorun;
 	bool tcxo_sw;
 	enum {
@@ -1422,6 +1429,8 @@ static int gnss_kepler_bcmd_probe(struct gnss_kepler *gk, u32 *out)
  * matters: hold_reset first so the sequencer registers are already
  * staged, then drop START and PWRON.
  */
+static void gnss_kepler_shared_reg_disable(struct gnss_kepler *gk);
+
 static void gnss_kepler_power_off(struct gnss_kepler *gk)
 {
 	unsigned int stat;
@@ -1449,6 +1458,8 @@ static void gnss_kepler_power_off(struct gnss_kepler *gk)
 
 	regmap_read(gk->pmureg, GNSS_STAT, &stat);
 	dev_info(gk->dev, "power_off: GNSS_STAT=0x%08x\n", stat);
+
+	gnss_kepler_shared_reg_disable(gk);
 }
 
 /*
@@ -1492,39 +1503,90 @@ static void gnss_kepler_hold_reset(struct gnss_kepler *gk)
 
 /*
  * exynos_pmu_shared_reg_enable()/_disable() (mcu_ipc.c downstream),
- * called directly from gnss_pmu_release_reset() -- not through the
- * normal mbox_set_interrupt(MCU_CP, ...) doorbell path, just the two
- * raw register/mailbox writes. The real function reference-counts
- * across GNSS/CP/WLBT/FM-radio callers (shared_reg_usage_cnt); this
- * port only ever has one caller, so it always takes the "usage_cnt was
- * 0" branch and skips the counter entirely. The real function also
- * computes a need_delay from the CP mailbox's ISSR3 and stalls 3ms on
- * the *next* CP doorbell ring if set -- gnss_pmu_release_reset()
- * discards that return value, so it's not reproduced here either.
+ * called directly from gnss_pmu_release_reset(). The CP mailbox driver
+ * provides it as a regulator, so the reference count downstream keeps
+ * across GNSS/CP/WLBT/FM-radio callers (shared_reg_usage_cnt) is the
+ * regulator core's. The real function also computes a need_delay from
+ * the CP mailbox's ISSR3 and stalls 3ms on the *next* CP doorbell ring
+ * if set -- gnss_pmu_release_reset() discards that return value, so it's
+ * not reproduced here.
  */
 static void gnss_kepler_shared_reg_enable(struct gnss_kepler *gk)
 {
-	u32 val = readl(gk->cp_mbox + MCU_IPC_ISSR(2));
+	u32 val;
+	int ret = 0;
 
-	writel(val | CP_WAKEUP_REQ, gk->cp_mbox + MCU_IPC_ISSR(2));
-	regmap_update_bits(gk->pmureg, EXT_REGULATOR_SHARED_OPTION,
-			    EXT_REGULATOR_SHARED_ENABLE,
-			    EXT_REGULATOR_SHARED_ENABLE);
+	mutex_lock(&gk->power_lock);
+	if (!gk->shared_reg_on) {
+		ret = regulator_enable(gk->shared_reg);
+		gk->shared_reg_on = !ret;
+	}
+	mutex_unlock(&gk->power_lock);
 
 	regmap_read(gk->pmureg, EXT_REGULATOR_SHARED_STATUS, &val);
-	dev_info(gk->dev, "shared_reg_enable: EXT_REGULATOR_SHARED_STATUS=0x%08x\n",
-		 val);
+	dev_info(gk->dev, "shared_reg_enable: %d, EXT_REGULATOR_SHARED_STATUS=0x%08x\n",
+		 ret, val);
 }
 
 static void gnss_kepler_shared_reg_disable(struct gnss_kepler *gk)
 {
-	u32 val;
+	mutex_lock(&gk->power_lock);
+	if (gk->shared_reg_on) {
+		regulator_disable(gk->shared_reg);
+		gk->shared_reg_on = false;
+	}
+	mutex_unlock(&gk->power_lock);
+}
 
-	regmap_update_bits(gk->pmureg, EXT_REGULATOR_SHARED_OPTION,
-			    EXT_REGULATOR_SHARED_ENABLE, 0);
+/*
+ * The core needs the CP running: with the CP down its first RF access
+ * fails (SPDY RD FAIL, kepler.md 13.9 and 14.22). Hold the modem's power
+ * reference from the first power-up until the domain is switched off for
+ * good (debugfs start=0, or unbinding the driver), so a remoteproc "stop"
+ * only drops its own reference and leaves the CP up. The reset cycles
+ * gpsd drives (RESET, then REQ_BCMD) keep it: they are not "GNSS off".
+ *
+ * This only joins a CP that is already running and never boots one:
+ * the CP cannot be restarted on the same boot yet, so booting it here
+ * and dropping it at power_off would lose it for the rest of the boot.
+ * For experiments without the CP:
+ *     echo 0 > /sys/kernel/debug/gnss_kepler/need_modem
+ */
+static int gnss_kepler_modem_hold(struct gnss_kepler *gk)
+{
+	int ret = 0;
 
-	val = readl(gk->cp_mbox + MCU_IPC_ISSR(2));
-	writel(val & ~CP_WAKEUP_REQ, gk->cp_mbox + MCU_IPC_ISSR(2));
+	if (!gk->modem || !gk->need_modem)
+		return 0;
+
+	mutex_lock(&gk->power_lock);
+	if (gk->modem_held)
+		goto out;
+
+	if (READ_ONCE(gk->modem->state) != RPROC_RUNNING) {
+		dev_err(gk->dev, "the modem (%s) is not running, start it first\n",
+			gk->modem->name);
+		ret = -ENOLINK;
+		goto out;
+	}
+
+	/* already running, so this only takes a power reference */
+	ret = rproc_boot(gk->modem);
+	gk->modem_held = !ret;
+out:
+	mutex_unlock(&gk->power_lock);
+
+	return ret;
+}
+
+static void gnss_kepler_modem_release(struct gnss_kepler *gk)
+{
+	mutex_lock(&gk->power_lock);
+	if (gk->modem_held) {
+		rproc_shutdown(gk->modem);
+		gk->modem_held = false;
+	}
+	mutex_unlock(&gk->power_lock);
 }
 
 /*
@@ -1592,13 +1654,12 @@ release_reset_done:
 	 * exynos_pmu_shared_reg_disable() unconditionally, and this port
 	 * copied it. On stock Android that is harmless: the running CP
 	 * holds the shared regulator on its own account, so GNSS dropping
-	 * its reference changes nothing. Under postmarketOS there is no CP
-	 * firmware, GNSS is the only holder, and the TCXO goes away the
-	 * instant this returns -- microseconds after the core starts.
+	 * its reference changes nothing. Without CP firmware, GNSS is the
+	 * only holder, and the TCXO goes away the instant this returns --
+	 * microseconds after the core starts.
 	 *
-	 * A core with no reference clock that is alive, looping and unable
-	 * to drive its IPC rings is exactly what we have been looking at,
-	 * so make it switchable rather than assumed:
+	 * Switchable rather than assumed; with it set, GNSS keeps its vote
+	 * until power_off:
 	 *
 	 *     echo 1 > /sys/kernel/debug/gnss_kepler/hold_shared_reg
 	 */
@@ -1846,10 +1907,15 @@ static long gnss_ipc_ioctl(struct file *file, unsigned int cmd,
 		gk->state = GNSS_STATE_HOLD_RESET;
 		return 0;
 
-	case GNSS_IOCTL_RELEASE_RESET:
+	case GNSS_IOCTL_RELEASE_RESET: {
+		int ret = gnss_kepler_modem_hold(gk);
+
+		if (ret)
+			return ret;
 		gnss_kepler_release_reset(gk);
 		gk->state = GNSS_STATE_ONLINE;
 		return 0;
+	}
 
 	case GNSS_IOCTL_REQ_BCMD: {
 		struct kepler_bcmd_args a;
@@ -1857,6 +1923,10 @@ static long gnss_ipc_ioctl(struct file *file, unsigned int cmd,
 
 		if (copy_from_user(&a, argp, sizeof(a)))
 			return -EFAULT;
+
+		ret = gnss_kepler_modem_hold(gk);
+		if (ret)
+			return ret;
 
 		ret = gnss_kepler_req_bcmd(gk, a.cmd_id, a.flags, a.param1,
 					    a.param2);
@@ -2065,10 +2135,15 @@ static ssize_t start_write(struct file *file, const char __user *buf,
 	if (ret)
 		return ret;
 
-	if (on)
+	if (on) {
+		ret = gnss_kepler_modem_hold(gk);
+		if (ret)
+			return ret;
 		gnss_kepler_power_on(gk);
-	else
+	} else {
 		gnss_kepler_power_off(gk);
+		gnss_kepler_modem_release(gk);
+	}
 
 	return count;
 }
@@ -2099,7 +2174,10 @@ static ssize_t release_write(struct file *file, const char __user *buf,
 			      size_t count, loff_t *ppos)
 {
 	struct gnss_kepler *gk = file->private_data;
+	int ret = gnss_kepler_modem_hold(gk);
 
+	if (ret)
+		return ret;
 	gnss_kepler_release_reset(gk);
 
 	return count;
@@ -2346,10 +2424,11 @@ static int regs_show(struct seq_file *s, void *unused)
 		seq_printf(s, "EXT_REGULATOR_SHARED_OPTION (0x%04x) = 0x%08x\n",
 			   EXT_REGULATOR_SHARED_OPTION, val);
 	}
-	seq_printf(s, "CP_MBOX ISSR2 (CP_WAKEUP)    = 0x%08x\n",
-		   readl(gk->cp_mbox + MCU_IPC_ISSR(2)));
-	seq_printf(s, "CP_MBOX ISSR3                = 0x%08x\n",
-		   readl(gk->cp_mbox + MCU_IPC_ISSR(3)));
+	seq_printf(s, "shared regulator vote        = %s\n",
+		   gk->shared_reg_on ? "held" : "not held");
+	seq_printf(s, "modem                        = %s\n",
+		   !gk->modem ? "none" :
+		   gk->modem_held ? "held" : "not held");
 
 	return 0;
 }
@@ -2492,6 +2571,8 @@ static void gnss_kepler_debugfs_init(struct gnss_kepler *gk)
 
 	debugfs_create_bool("hold_shared_reg", 0600, root,
 			     &gk->hold_shared_reg);
+	gk->need_modem = true;
+	debugfs_create_bool("need_modem", 0600, root, &gk->need_modem);
 	gk->load_fw_autorun = true;
 	debugfs_create_bool("bcmd_keep_loop", 0600, root, &gk->bcmd_keep_loop);
 	debugfs_create_bool("tcxo_sw", 0600, root, &gk->tcxo_sw);
@@ -2555,6 +2636,28 @@ static void __iomem *gnss_kepler_map_wc(phys_addr_t base, size_t size)
 	return (void __iomem *)addr;
 }
 
+static void gnss_kepler_put_modem(void *data)
+{
+	rproc_put(data);
+}
+
+/* samsung,modem: the CP remoteproc the core depends on, optional */
+static int gnss_kepler_get_modem(struct gnss_kepler *gk)
+{
+	phandle ph;
+
+	if (of_property_read_u32(gk->dev->of_node, "samsung,modem", &ph))
+		return 0;
+
+	gk->modem = rproc_get_by_phandle(ph);
+	if (!gk->modem)
+		return dev_err_probe(gk->dev, -EPROBE_DEFER,
+				      "modem remoteproc not registered yet\n");
+
+	return devm_add_action_or_reset(gk->dev, gnss_kepler_put_modem,
+					gk->modem);
+}
+
 static int gnss_kepler_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -2568,6 +2671,7 @@ static int gnss_kepler_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	gk->dev = dev;
+	mutex_init(&gk->power_lock);
 	init_completion(&gk->bcmd_cmpl);
 	init_completion(&gk->fault_cmpl);
 	spin_lock_init(&gk->tx_lock);
@@ -2633,17 +2737,15 @@ static int gnss_kepler_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(gk->mbox),
 				      "failed to map mailbox registers\n");
 
-	/*
-	 * Not this device's own resource -- see the CP_MBOX_PHYS_BASE
-	 * comment above. Nothing else on this kernel drives the CP
-	 * mailbox IP (no modem_ctrl_ss310ap port exists here), so a plain
-	 * devm_ioremap of the fixed SoC address is fine for this bring-up
-	 * driver rather than adding a second DT-discovered resource.
-	 */
-	gk->cp_mbox = devm_ioremap(dev, CP_MBOX_PHYS_BASE, CP_MBOX_SIZE);
-	if (!gk->cp_mbox)
-		return dev_err_probe(dev, -ENOMEM,
-				      "failed to map CP mailbox registers\n");
+	/* the vote for the regulator shared with the CP, see shared_reg_enable() */
+	gk->shared_reg = devm_regulator_get(dev, "shared");
+	if (IS_ERR(gk->shared_reg))
+		return dev_err_probe(dev, PTR_ERR(gk->shared_reg),
+				      "no shared regulator\n");
+
+	ret = gnss_kepler_get_modem(gk);
+	if (ret)
+		return ret;
 
 	gk->irq_mbox = platform_get_irq_byname(pdev, "mbox");
 	if (gk->irq_mbox < 0)
@@ -2722,6 +2824,8 @@ static void gnss_kepler_remove(struct platform_device *pdev)
 	struct gnss_kepler *gk = platform_get_drvdata(pdev);
 
 	misc_deregister(&gk->miscdev);
+	gnss_kepler_shared_reg_disable(gk);
+	gnss_kepler_modem_release(gk);
 	debugfs_remove_recursive(gk->debugfs_dir);
 	cancel_work_sync(&gk->ipc_rx_work);
 	vunmap(gk->dram);

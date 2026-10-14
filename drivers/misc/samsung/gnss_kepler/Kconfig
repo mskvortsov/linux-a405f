@@ -3,6 +3,7 @@
 config GNSS_KEPLER
 	tristate "Samsung Kepler GNSS companion chip bring-up driver"
 	depends on (ARCH_EXYNOS && OF) || COMPILE_TEST
+	depends on REGULATOR && REMOTEPROC
 	help
 	  Bring-up driver for the Samsung "Kepler" GNSS companion chip
 	  found on several Exynos-based Samsung phones.
