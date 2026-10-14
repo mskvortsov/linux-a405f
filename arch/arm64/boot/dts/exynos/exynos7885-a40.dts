@@ -584,6 +584,24 @@
 };
 
 &pinctrl_top {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mot_ldo_off>;
+
+	/*
+	 * MOT_LDO enables the vibration motor's supply. Nothing on mainline
+	 * drives the motor, so hold it off (as downstream does) instead of
+	 * leaving the pin in whatever state the bootloader left it.
+	 */
+	mot_ldo_off: mot-ldo-off-pins {
+		samsung,pins = "gpp0-3";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_OUTPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_DOWN>;
+		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
+		samsung,pin-con-pdn = <EXYNOS_PIN_PDN_OUT0>;
+		samsung,pin-pud-pdn = <EXYNOS_PIN_PULL_DOWN>;
+		samsung,pin-val = <0>;
+	};
+
 	pm_wrsti: pm-wrsti-pins {
 		samsung,pins = "gpg1-1";
 		samsung,pin-con-pdn = <EXYNOS_PIN_PDN_PREV>;
