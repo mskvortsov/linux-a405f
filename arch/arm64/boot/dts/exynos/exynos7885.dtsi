@@ -306,6 +306,14 @@
 			#mbox-cells = <0>;
 		};
 
+		/* AP <-> modem (CP) mailbox, MCU_IPC */
+		mailbox_cp: mailbox@12080000 {
+			compatible = "samsung,exynos7885-mcu-ipc";
+			reg = <0x12080000 0x180>;
+			interrupts = <GIC_SPI 55 IRQ_TYPE_LEVEL_HIGH>;
+			#mbox-cells = <1>;
+		};
+
 		tmu: tmu@10070000 {
 			compatible = "samsung,exynos7885-tmu";
 			reg = <0x10070000 0x400>;

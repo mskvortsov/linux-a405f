@@ -66,6 +66,17 @@ config EXYNOS_MBOX
 	  is ignored and the mailbox controller acts as a doorbell that raises
 	  the interrupt to the ACPM firmware.
 
+config EXYNOS_MCU_IPC
+	bool "Exynos MCU_IPC mailbox"
+	depends on ARCH_EXYNOS || COMPILE_TEST
+	select MFD_SYSCON
+	select REGMAP_MMIO
+	help
+	  Say Y here to build the AP side of the Samsung Exynos MCU_IPC
+	  block, through which the AP talks to the Shannon modem (CP).
+	  Its 16 doorbells per direction are mailbox channels; its 64
+	  shared registers are exposed to clients as a syscon regmap.
+
 config IMX_MBOX
 	tristate "i.MX Mailbox"
 	depends on ARCH_MXC || COMPILE_TEST
