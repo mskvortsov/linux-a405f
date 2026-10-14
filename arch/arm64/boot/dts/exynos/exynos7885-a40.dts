@@ -551,6 +551,33 @@
 	};
 };
 
+&pmu_system_controller {
+	/*
+	 * S-Boot treats a reset as a reboot only when INFORM2 holds
+	 * 0x12345678, which downstream's sec_reboot() writes before every
+	 * restart (SEC_POWER_RESET). Otherwise it runs its power-on checks,
+	 * and with no charger on VBUS and the power key not held it drops
+	 * PS_HOLD: the board powers off instead of rebooting. The value
+	 * survives resets and is lost on power-off.
+	 *
+	 * The SoC's reboot-mode node writes INFORM4 (0x810), which S-Boot
+	 * only saves and clears, and the reboot-mode core allows one
+	 * syscon-reboot-mode instance, so this one replaces it.
+	 */
+	/delete-node/ reboot-mode;
+
+	sboot-reboot-mode {
+		compatible = "syscon-reboot-mode";
+		offset = <0x0808>; /* INFORM2 */
+		mode-normal = <0x12345678>;
+		mode-recovery = <0x12345678>;
+		mode-download = <0x12345678>;
+		mode-fastboot = <0x12345678>;
+		mode-bootloader = <0x12345678>;
+		mode-charge = <0x12345678>;
+	};
+};
+
 &pinctrl_top {
 	pm_wrsti: pm-wrsti-pins {
 		samsung,pins = "gpg1-1";
