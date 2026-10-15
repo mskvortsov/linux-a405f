@@ -8,6 +8,7 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/qcom,gcc-msm8974.h>
 #include <dt-bindings/reset/qcom,gcc-msm8974.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	#address-cells = <1>;
@@ -44,6 +45,7 @@
 			operating-points-v2 = <&cpu_opp_table>;
 			qcom,acc = <&acc0>;
 			qcom,saw = <&saw0>;
+			#cooling-cells = <2>;
 		};
 
 		cpu1: cpu@1 {
@@ -56,6 +58,7 @@
 			operating-points-v2 = <&cpu_opp_table>;
 			qcom,acc = <&acc1>;
 			qcom,saw = <&saw1>;
+			#cooling-cells = <2>;
 		};
 
 		l2: l2-cache {
@@ -432,9 +435,69 @@
 			reg = <0xfc428000 0x4000>;
 		};
 
+		tsens: thermal-sensor@fc4a9000 {
+			compatible = "qcom,msm8610-tsens", "qcom,tsens-v0_1";
+			reg = <0xfc4a9000 0x1000>, /* TM */
+			      <0xfc4a8000 0x1000>; /* SROT */
+			nvmem-cells = <&tsens_mode>,
+				      <&tsens_base1>, <&tsens_base2>,
+				      <&tsens_s0_p1>, <&tsens_s0_p2>,
+				      <&tsens_s5_p1>, <&tsens_s5_p2>;
+			nvmem-cell-names = "mode",
+					   "base1", "base2",
+					   "s0_p1", "s0_p2",
+					   "s5_p1", "s5_p2";
+			#qcom,sensors = <2>;
+			interrupts = <GIC_SPI 184 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "uplow";
+			#thermal-sensor-cells = <1>;
+		};
+
 		restart@fc4ab000 {
 			compatible = "qcom,pshold";
 			reg = <0xfc4ab000 0x4>;
+		};
+
+		qfprom: efuse@fc4bc000 {
+			compatible = "qcom,msm8610-qfprom", "qcom,qfprom";
+			reg = <0xfc4bc000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			tsens_base1: base1@1a4 {
+				reg = <0x1a4 0x1>;
+				bits = <0 8>;
+			};
+
+			tsens_base2: base2@1a5 {
+				reg = <0x1a5 0x1>;
+				bits = <0 8>;
+			};
+
+			tsens_s0_p1: s0-p1@1a6 {
+				reg = <0x1a6 0x1>;
+				bits = <0 6>;
+			};
+
+			tsens_s0_p2: s0-p2@1a6 {
+				reg = <0x1a6 0x2>;
+				bits = <6 6>;
+			};
+
+			tsens_mode: mode@1a7 {
+				reg = <0x1a7 0x1>;
+				bits = <4 3>;
+			};
+
+			tsens_s5_p1: s5-p1@1ac {
+				reg = <0x1ac 0x1>;
+				bits = <0 6>;
+			};
+
+			tsens_s5_p2: s5-p2@1ac {
+				reg = <0x1ac 0x2>;
+				bits = <6 6>;
+			};
 		};
 
 		spmi_bus: spmi@fc4cf000 {
@@ -529,6 +592,37 @@
 					pins = "sdc2_cmd", "sdc2_data";
 					drive-strength = <2>;
 					bias-pull-up;
+				};
+			};
+		};
+	};
+
+	thermal-zones {
+		cpu-thermal {
+			polling-delay-passive = <250>;
+			polling-delay = <1000>;
+
+			thermal-sensors = <&tsens 5>;
+
+			cooling-maps {
+				map0 {
+					trip = <&cpu_alert>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+			};
+
+			trips {
+				cpu_alert: trip0 {
+					temperature = <75000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				cpu_crit: trip1 {
+					temperature = <110000>;
+					hysteresis = <2000>;
+					type = "critical";
 				};
 			};
 		};
