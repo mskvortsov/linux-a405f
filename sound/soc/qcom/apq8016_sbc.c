@@ -65,6 +65,10 @@ static int apq8016_dai_init(struct snd_soc_pcm_runtime *rtd, int mi2s)
 	int i, rval;
 	u32 value;
 
+	/* The MI2S interfaces of some SoCs are not muxed */
+	if (!pdata->spkr_iomux)
+		goto jack;
+
 	switch (mi2s) {
 	case MI2S_PRIMARY:
 		writel(readl(pdata->spkr_iomux) | SPKR_CTL_PRI_WS_SLAVE_SEL_11,
@@ -99,6 +103,7 @@ static int apq8016_dai_init(struct snd_soc_pcm_runtime *rtd, int mi2s)
 
 	}
 
+jack:
 	if (!pdata->jack_setup) {
 		struct snd_jack *jack;
 
@@ -284,16 +289,35 @@ static const struct snd_soc_dapm_widget apq8016_sbc_dapm_widgets[] = {
 	SND_SOC_DAPM_MIC("Digital Mic2", NULL),
 };
 
+struct apq8016_sbc_match_data {
+	void (*add_ops)(struct snd_soc_card *card);
+	bool has_iomux;
+};
+
+static const struct apq8016_sbc_match_data apq8016_sbc_data = {
+	.add_ops = apq8016_sbc_add_ops,
+	.has_iomux = true,
+};
+
+static const struct apq8016_sbc_match_data msm8610_qdsp6_data = {
+	.add_ops = msm8916_qdsp6_add_ops,
+};
+
+static const struct apq8016_sbc_match_data msm8916_qdsp6_data = {
+	.add_ops = msm8916_qdsp6_add_ops,
+	.has_iomux = true,
+};
+
 static int apq8016_sbc_platform_probe(struct platform_device *pdev)
 {
-	void (*add_ops)(struct snd_soc_card *card);
+	const struct apq8016_sbc_match_data *match;
 	struct device *dev = &pdev->dev;
 	struct snd_soc_card *card;
 	struct apq8016_sbc_data *data;
 	int ret;
 
-	add_ops = device_get_match_data(&pdev->dev);
-	if (!add_ops)
+	match = device_get_match_data(&pdev->dev);
+	if (!match)
 		return -EINVAL;
 
 	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
@@ -312,23 +336,26 @@ static int apq8016_sbc_platform_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	data->mic_iomux = devm_platform_ioremap_resource_byname(pdev, "mic-iomux");
-	if (IS_ERR(data->mic_iomux))
-		return PTR_ERR(data->mic_iomux);
+	if (match->has_iomux) {
+		data->mic_iomux = devm_platform_ioremap_resource_byname(pdev, "mic-iomux");
+		if (IS_ERR(data->mic_iomux))
+			return PTR_ERR(data->mic_iomux);
 
-	data->spkr_iomux = devm_platform_ioremap_resource_byname(pdev, "spkr-iomux");
-	if (IS_ERR(data->spkr_iomux))
-		return PTR_ERR(data->spkr_iomux);
+		data->spkr_iomux = devm_platform_ioremap_resource_byname(pdev, "spkr-iomux");
+		if (IS_ERR(data->spkr_iomux))
+			return PTR_ERR(data->spkr_iomux);
+	}
 
 	snd_soc_card_set_drvdata(card, data);
 
-	add_ops(card);
+	match->add_ops(card);
 	return devm_snd_soc_register_card(&pdev->dev, card);
 }
 
 static const struct of_device_id apq8016_sbc_device_id[] __maybe_unused = {
-	{ .compatible = "qcom,apq8016-sbc-sndcard", .data = apq8016_sbc_add_ops },
-	{ .compatible = "qcom,msm8916-qdsp6-sndcard", .data = msm8916_qdsp6_add_ops },
+	{ .compatible = "qcom,apq8016-sbc-sndcard", .data = &apq8016_sbc_data },
+	{ .compatible = "qcom,msm8610-qdsp6-sndcard", .data = &msm8610_qdsp6_data },
+	{ .compatible = "qcom,msm8916-qdsp6-sndcard", .data = &msm8916_qdsp6_data },
 	{},
 };
 MODULE_DEVICE_TABLE(of, apq8016_sbc_device_id);
