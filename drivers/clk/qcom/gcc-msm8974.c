@@ -2876,12 +2876,11 @@ static int gcc_msm8974_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	const void *data = device_get_match_data(dev);
 
-	if (!of_device_is_compatible(dev->of_node, "qcom,gcc-msm8974")) {
-		if (data == &gcc_msm8226_desc)
-			msm8226_clock_override();
-		else
-			msm8974_pro_clock_override();
-	}
+	if (of_device_is_compatible(dev->of_node, "qcom,gcc-msm8974pro") ||
+	    of_device_is_compatible(dev->of_node, "qcom,gcc-msm8974pro-ac"))
+		msm8974_pro_clock_override();
+	else if (data == &gcc_msm8226_desc)
+		msm8226_clock_override();
 
 	ret = qcom_cc_register_board_clk(dev, "xo_board", "xo", 19200000);
 	if (ret)
@@ -2891,7 +2890,7 @@ static int gcc_msm8974_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	return qcom_cc_probe(pdev, &gcc_msm8974_desc);
+	return qcom_cc_probe(pdev, data);
 }
 
 static struct platform_driver gcc_msm8974_driver = {
