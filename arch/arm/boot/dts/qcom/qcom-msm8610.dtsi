@@ -8,6 +8,7 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/clock/qcom,gcc-msm8974.h>
+#include <dt-bindings/clock/qcom,msm8610-lpasscc.h>
 #include <dt-bindings/clock/qcom,rpmcc.h>
 #include <dt-bindings/power/qcom-rpmpd.h>
 #include <dt-bindings/reset/qcom,gcc-msm8974.h>
@@ -454,6 +455,32 @@
 			status = "disabled";
 		};
 
+		blsp1_i2c5: i2c@f9927000 {
+			compatible = "qcom,i2c-qup-v2.1.1";
+			reg = <0xf9927000 0x1000>;
+			interrupts = <GIC_SPI 99 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&gcc GCC_BLSP1_QUP5_I2C_APPS_CLK>,
+				 <&gcc GCC_BLSP1_AHB_CLK>;
+			clock-names = "core", "iface";
+			pinctrl-0 = <&blsp1_i2c5_default_state>;
+			pinctrl-names = "default";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+
+			wcd_codec: audio-codec@d {
+				compatible = "qcom,msm8610-wcd";
+				reg = <0x0d>, <0x77>;
+				reg-names = "core", "analog";
+				clocks = <&lpasscc DIGCODEC_CLK>,
+					 <&lpasscc DIGCODEC_AHB_CLK>;
+				clock-names = "mclk", "ahb";
+				qcom,digital-codec = <&lpass_codec>;
+				#sound-dai-cells = <1>;
+				status = "disabled";
+			};
+		};
+
 		usb: usb@f9a55000 {
 			compatible = "qcom,ci-hdrc";
 			reg = <0xf9a55000 0x200>,
@@ -615,6 +642,11 @@
 			interrupt-controller;
 			#interrupt-cells = <2>;
 
+			blsp1_i2c5_default_state: blsp1-i2c5-default-state {
+				pins = "cdc_i2c_scl", "cdc_i2c_sda";
+				bias-pull-up;
+			};
+
 			blsp1_uart2_default_state: blsp1-uart2-default-state {
 				pins = "gpio4", "gpio5";
 				function = "blsp_uart2";
@@ -677,6 +709,19 @@
 					bias-pull-up;
 				};
 			};
+		};
+
+		lpasscc: clock-controller@fe000000 {
+			compatible = "qcom,msm8610-lpasscc";
+			reg = <0xfe000000 0x40000>;
+			clocks = <&xo_board>;
+			clock-names = "xo";
+			#clock-cells = <1>;
+		};
+
+		lpass_codec: codec@fe043000 {
+			compatible = "qcom,msm8610-lpass-codec", "syscon";
+			reg = <0xfe043000 0x200>;
 		};
 
 		adsp: remoteproc@fe200000 {
