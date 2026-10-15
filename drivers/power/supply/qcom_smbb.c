@@ -111,6 +111,7 @@ struct smbb_charger {
 
 	bool dc_disabled;
 	bool jeita_ext_temp;
+	bool charge_inhibit;
 	unsigned long status;
 	struct mutex statlock;
 
@@ -605,6 +606,8 @@ static int smbb_battery_get_property(struct power_supply *psy,
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
 		else if (!(status & (STATUS_DCIN_VALID | STATUS_USBIN_VALID)))
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+		else if (chg->charge_inhibit)
+			val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
 		else if (status & STATUS_CHG_DONE)
 			val->intval = POWER_SUPPLY_STATUS_FULL;
 		else if (!(status & STATUS_BAT_OK))
@@ -649,10 +652,50 @@ static int smbb_battery_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN:
 		val->intval = 3000000; /* single-cell li-ion low end */
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR:
+		val->intval = chg->charge_inhibit ?
+			      POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE :
+			      POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO;
+		break;
 	default:
 		rc = -EINVAL;
 		break;
 	}
+
+	return rc;
+}
+
+static int smbb_set_charge_behaviour(struct smbb_charger *chg, int behaviour)
+{
+	bool inhibit;
+	int rc;
+
+	switch (behaviour) {
+	case POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO:
+		inhibit = false;
+		break;
+	case POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE:
+		inhibit = true;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	mutex_lock(&chg->statlock);
+	if (inhibit == chg->charge_inhibit) {
+		mutex_unlock(&chg->statlock);
+		return 0;
+	}
+
+	/* Disabling the charger stops charging, the input keeps the system up */
+	rc = regmap_update_bits(chg->regmap, chg->addr + SMBB_CHG_CTRL, CTRL_EN,
+				inhibit ? 0 : CTRL_EN);
+	if (!rc)
+		chg->charge_inhibit = inhibit;
+	mutex_unlock(&chg->statlock);
+
+	if (!rc)
+		power_supply_changed(chg->bat_psy);
 
 	return rc;
 }
@@ -671,6 +714,9 @@ static int smbb_battery_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 		rc = smbb_charger_attr_write(chg, ATTR_BAT_VMAX, val->intval);
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR:
+		rc = smbb_set_charge_behaviour(chg, val->intval);
+		break;
 	default:
 		rc = -EINVAL;
 		break;
@@ -685,6 +731,7 @@ static int smbb_battery_writable_property(struct power_supply *psy,
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
+	case POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR:
 		return 1;
 	default:
 		return 0;
@@ -706,6 +753,7 @@ static enum power_supply_property smbb_battery_properties[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
+	POWER_SUPPLY_PROP_CHARGE_BEHAVIOUR,
 };
 
 static const struct reg_off_mask_default {
@@ -758,6 +806,8 @@ static char *smbb_bif[] = { "smbb-bif" };
 static const struct power_supply_desc bat_psy_desc = {
 	.name = "smbb-bif",
 	.type = POWER_SUPPLY_TYPE_BATTERY,
+	.charge_behaviours = BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO) |
+			     BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE),
 	.properties = smbb_battery_properties,
 	.num_properties = ARRAY_SIZE(smbb_battery_properties),
 	.get_property = smbb_battery_get_property,
