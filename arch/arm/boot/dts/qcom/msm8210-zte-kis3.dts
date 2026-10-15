@@ -50,6 +50,19 @@
 	cpu-supply = <&pm8110_s2>;
 };
 
+&pm8110_charger {
+	/* The bootloader locks the safe limits at these values */
+	qcom,fast-charge-safe-current = <1000000>;
+	qcom,fast-charge-current-limit = <1000000>;
+	qcom,fast-charge-safe-voltage = <4200000>;
+	qcom,fast-charge-high-threshold-voltage = <4200000>;
+	qcom,auto-recharge-threshold-voltage = <4100000>;
+	qcom,minimum-input-voltage = <4300000>;
+	usb-charge-current-limit = <500000>;
+
+	status = "okay";
+};
+
 &pm8110_resin {
 	linux,code = <KEY_VOLUMEDOWN>;
 
@@ -143,13 +156,13 @@
 
 &usb {
 	dr_mode = "peripheral";
-	extcon = <&pm8110_usb_vbus>;
+	extcon = <&pm8110_charger>;
 
 	status = "okay";
 };
 
 &usb_hs_phy {
-	extcon = <&pm8110_usb_vbus>;
+	extcon = <&pm8110_charger>;
 	v1p8-supply = <&pm8110_l10>;
 	v3p3-supply = <&pm8110_l20>;
 
