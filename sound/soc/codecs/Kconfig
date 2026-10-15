@@ -1537,6 +1537,17 @@ config SND_SOC_MSM8916_WCD_ANALOG
 	tristate "Qualcomm MSM8916 WCD Analog Codec"
 	depends on SPMI || COMPILE_TEST
 
+config SND_SOC_MSM8610_WCD
+	tristate "Qualcomm MSM8610 WCD Codec"
+	depends on I2C
+	select MFD_SYSCON
+	help
+	  Support for the internal audio codec of the Qualcomm MSM8610
+	  (MSM8x10) family of SoCs: the analog codec controlled over I2C and
+	  the digital codec in the LPASS. It provides the earpiece,
+	  speaker, headphone and line outputs and the microphone inputs.
+	  Say Y or M if you want audio on these SoCs.
+
 config SND_SOC_MSM8916_WCD_DIGITAL
 	tristate "Qualcomm MSM8916 WCD DIGITAL Codec"
 	select REGMAP_MMIO
