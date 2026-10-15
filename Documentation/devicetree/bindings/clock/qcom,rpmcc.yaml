@@ -29,6 +29,7 @@ properties:
               - qcom,rpmcc-ipq806x
               - qcom,rpmcc-mdm9607
               - qcom,rpmcc-msm8226
+              - qcom,rpmcc-msm8610
               - qcom,rpmcc-msm8660
               - qcom,rpmcc-msm8909
               - qcom,rpmcc-msm8916
@@ -116,6 +117,7 @@ allOf:
             enum:
               - qcom,rpmcc-mdm9607
               - qcom,rpmcc-msm8226
+              - qcom,rpmcc-msm8610
               - qcom,rpmcc-msm8916
               - qcom,rpmcc-msm8917
               - qcom,rpmcc-msm8936
