@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/sound/qcom,msm8610-wcd.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Qualcomm MSM8610 internal audio codec
+
+maintainers:
+  - Mikhael Skvortsov <mikhael.skvortsov@gmail.com>
+
+description:
+  The internal audio codec of the MSM8610 (MSM8x10) family of SoCs consists
+  of an analog part with its own digital core, which is controlled over I2C
+  at two slave addresses, and a digital part with the decimators and
+  interpolators in the LPASS, which is memory mapped. The two parts are
+  connected by a PDM interface, the digital part by I2S to the LPASS MI2S
+  interfaces.
+
+allOf:
+  - $ref: dai-common.yaml#
+
+properties:
+  compatible:
+    const: qcom,msm8610-wcd
+
+  reg:
+    items:
+      - description: I2C address of the digital core of the analog part
+      - description: I2C address of the analog part
+
+  reg-names:
+    items:
+      - const: core
+      - const: analog
+
+  clocks:
+    items:
+      - description: Digital codec core clock
+      - description: Digital codec register interface clock
+
+  clock-names:
+    items:
+      - const: mclk
+      - const: ahb
+
+  qcom,digital-codec:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Syscon node with the registers of the digital part
+
+  vdd-cp-supply:
+    description: Charge pump supply
+
+  vdda-h-supply:
+    description: Analog supply
+
+  vdd-px-supply:
+    description: I/O supply
+
+  vdd-1p2-supply:
+    description: 1.2 V digital supply
+
+  vdd-micbias-supply:
+    description: Microphone bias supply
+
+  '#sound-dai-cells':
+    const: 1
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - clocks
+  - clock-names
+  - qcom,digital-codec
+  - vdd-cp-supply
+  - vdda-h-supply
+  - vdd-px-supply
+  - vdd-1p2-supply
+  - vdd-micbias-supply
+  - '#sound-dai-cells'
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/qcom,msm8610-lpasscc.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        audio-codec@d {
+            compatible = "qcom,msm8610-wcd";
+            reg = <0x0d>, <0x77>;
+            reg-names = "core", "analog";
+            clocks = <&lpasscc DIGCODEC_CLK>,
+                     <&lpasscc DIGCODEC_AHB_CLK>;
+            clock-names = "mclk", "ahb";
+            qcom,digital-codec = <&lpass_codec>;
+            vdd-cp-supply = <&pm8110_s4>;
+            vdda-h-supply = <&pm8110_l6>;
+            vdd-px-supply = <&pm8110_l6>;
+            vdd-1p2-supply = <&pm8110_l4>;
+            vdd-micbias-supply = <&pm8110_l20>;
+            #sound-dai-cells = <1>;
+        };
+    };
+...
