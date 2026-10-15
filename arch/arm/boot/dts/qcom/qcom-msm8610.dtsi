@@ -39,7 +39,9 @@
 			enable-method = "qcom,msm8610-smp";
 			device_type = "cpu";
 			reg = <0>;
+			clocks = <&apcs>;
 			next-level-cache = <&l2>;
+			operating-points-v2 = <&cpu_opp_table>;
 			qcom,acc = <&acc0>;
 			qcom,saw = <&saw0>;
 		};
@@ -49,7 +51,9 @@
 			enable-method = "qcom,msm8610-smp";
 			device_type = "cpu";
 			reg = <1>;
+			clocks = <&apcs>;
 			next-level-cache = <&l2>;
+			operating-points-v2 = <&cpu_opp_table>;
 			qcom,acc = <&acc1>;
 			qcom,saw = <&saw1>;
 		};
@@ -75,6 +79,46 @@
 		device_type = "memory";
 		reg = <0x0 0x0>;
 	};
+
+	/*
+	 * Open-loop voltages: the ceilings of the SVS, nominal and turbo
+	 * CPR corners. CPR can lower them further.
+	 */
+	cpu_opp_table: opp-table-cpu {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-300000000 {
+			opp-hz = /bits/ 64 <300000000>;
+			opp-microvolt = <1150000>;
+		};
+
+		opp-384000000 {
+			opp-hz = /bits/ 64 <384000000>;
+			opp-microvolt = <1150000>;
+		};
+
+		opp-600000000 {
+			opp-hz = /bits/ 64 <600000000>;
+			opp-microvolt = <1150000>;
+		};
+
+		opp-787200000 {
+			opp-hz = /bits/ 64 <787200000>;
+			opp-microvolt = <1150000>;
+		};
+
+		opp-998400000 {
+			opp-hz = /bits/ 64 <998400000>;
+			opp-microvolt = <1275000>;
+		};
+
+		opp-1190400000 {
+			opp-hz = /bits/ 64 <1190400000>;
+			opp-microvolt = <1275000>;
+		};
+	};
+
 
 	pmu {
 		compatible = "arm,cortex-a7-pmu";
@@ -154,6 +198,38 @@
 				     "qcom,msm8916-apcs-kpss-global", "syscon";
 			reg = <0xf9011000 0x1000>;
 			#mbox-cells = <1>;
+			clocks = <&a7pll>, <&gcc GPLL0_VOTE>;
+			clock-names = "pll", "aux";
+			#clock-cells = <0>;
+		};
+
+		a7pll: clock@f9016000 {
+			compatible = "qcom,msm8610-a7pll", "qcom,msm8226-a7pll";
+			reg = <0xf9016000 0x40>;
+			#clock-cells = <0>;
+			clocks = <&xo_board>;
+			clock-names = "xo";
+			operating-points-v2 = <&a7pll_opp_table>;
+
+			a7pll_opp_table: opp-table {
+				compatible = "operating-points-v2";
+
+				opp-768000000 {
+					opp-hz = /bits/ 64 <768000000>;
+				};
+
+				opp-787200000 {
+					opp-hz = /bits/ 64 <787200000>;
+				};
+
+				opp-998400000 {
+					opp-hz = /bits/ 64 <998400000>;
+				};
+
+				opp-1190400000 {
+					opp-hz = /bits/ 64 <1190400000>;
+				};
+			};
 		};
 
 		watchdog@f9017000 {
