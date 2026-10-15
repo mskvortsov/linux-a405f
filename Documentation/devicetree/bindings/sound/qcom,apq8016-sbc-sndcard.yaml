@@ -14,6 +14,7 @@ properties:
   compatible:
     enum:
       - qcom,apq8016-sbc-sndcard
+      - qcom,msm8610-qdsp6-sndcard
       - qcom,msm8916-qdsp6-sndcard
 
   reg:
@@ -102,9 +103,21 @@ patternProperties:
 
 required:
   - compatible
-  - reg
-  - reg-names
   - model
+
+allOf:
+  - if:
+      properties:
+        compatible:
+          const: qcom,msm8610-qdsp6-sndcard
+    then:
+      properties:
+        reg: false
+        reg-names: false
+    else:
+      required:
+        - reg
+        - reg-names
 
 additionalProperties: false
 
