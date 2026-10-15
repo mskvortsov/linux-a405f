@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/power/supply/qcom,pm8110-bms.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Qualcomm PM8110 Battery Monitoring System
+
+maintainers:
+  - Mikhael Skvortsov <mikhael.skvortsov@gmail.com>
+
+description:
+  The Battery Monitoring System (BMS) is a hardware block found in some
+  Qualcomm PMICs such as PM8110. It measures the open circuit voltage of the
+  battery while the system sleeps and counts the charge flowing through a
+  sense resistor with its own current ADC, from which the state of charge is
+  calculated.
+
+allOf:
+  - $ref: power-supply.yaml#
+
+properties:
+  compatible:
+    const: qcom,pm8110-bms
+
+  reg:
+    items:
+      - description: BMS registers
+      - description: BMS current ADC registers
+
+  io-channels:
+    minItems: 4
+    items:
+      - description: Battery voltage
+      - description: Voltage ADC 625 mV reference
+      - description: Voltage ADC 1.25 V reference
+      - description: Current ADC channel of the sense resistor, for its gain
+      - description: Battery temperature
+
+  io-channel-names:
+    minItems: 4
+    items:
+      - const: vbat
+      - const: ref_625mv
+      - const: ref_1250mv
+      - const: iadc
+      - const: temp
+
+  monitored-battery: true
+
+  power-supplies: true
+
+required:
+  - compatible
+  - reg
+  - io-channels
+  - io-channel-names
+  - monitored-battery
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/iio/qcom,spmi-vadc.h>
+
+    pmic {
+      #address-cells = <1>;
+      #size-cells = <0>;
+
+      battery@4000 {
+        compatible = "qcom,pm8110-bms";
+        reg = <0x4000>, <0x3800>;
+        io-channels = <&pm8110_vadc VADC_VBAT_SNS>,
+                      <&pm8110_vadc VADC_REF_625MV>,
+                      <&pm8110_vadc VADC_REF_1250MV>,
+                      <&pm8110_iadc 0>,
+                      <&battery_thermistor>;
+        io-channel-names = "vbat",
+                           "ref_625mv",
+                           "ref_1250mv",
+                           "iadc",
+                           "temp";
+        monitored-battery = <&battery>;
+        power-supplies = <&pm8110_charger>;
+      };
+    };
