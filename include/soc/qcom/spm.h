@@ -16,7 +16,21 @@ enum pm_sleep_mode {
 };
 
 struct spm_driver_data;
+
+#if IS_BUILTIN(CONFIG_QCOM_SPM)
 void spm_set_low_power_mode(struct spm_driver_data *drv,
 			    enum pm_sleep_mode mode);
+struct spm_driver_data *spm_get_cpu_drv(unsigned int cpu);
+#else
+static inline void spm_set_low_power_mode(struct spm_driver_data *drv,
+					  enum pm_sleep_mode mode)
+{
+}
+
+static inline struct spm_driver_data *spm_get_cpu_drv(unsigned int cpu)
+{
+	return NULL;
+}
+#endif
 
 #endif /* __SPM_H__ */

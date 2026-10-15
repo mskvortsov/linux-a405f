@@ -87,6 +87,8 @@ struct spm_driver_data {
 	int reg_cpu;
 };
 
+static DEFINE_PER_CPU(struct spm_driver_data *, cpu_spm_drv);
+
 static const u16 spm_reg_offset_v4_1[SPM_REG_NR] = {
 	[SPM_REG_AVS_CTL]	= 0x904,
 	[SPM_REG_AVS_LIMIT]	= 0x908,
@@ -385,6 +387,18 @@ enable_avs:
 	}
 }
 
+/**
+ * spm_get_cpu_drv() - Get the SPM that controls a CPU
+ * @cpu: the CPU
+ *
+ * Return: the SPM driver data, or NULL if the CPU has no SPM or its SPM
+ * has not been probed yet.
+ */
+struct spm_driver_data *spm_get_cpu_drv(unsigned int cpu)
+{
+	return per_cpu(cpu_spm_drv, cpu);
+}
+
 static int spm_get_cpu(struct device *dev)
 {
 	int cpu;
@@ -512,6 +526,7 @@ static int spm_dev_probe(struct platform_device *pdev)
 	const struct of_device_id *match_id;
 	struct spm_driver_data *drv;
 	void __iomem *addr;
+	int cpu;
 
 	drv = devm_kzalloc(&pdev->dev, sizeof(*drv), GFP_KERNEL);
 	if (!drv)
@@ -554,6 +569,10 @@ static int spm_dev_probe(struct platform_device *pdev)
 	if (drv->reg_data->reg_offset[SPM_REG_SPM_CTL])
 		spm_set_low_power_mode(drv, PM_SLEEP_MODE_STBY);
 
+	cpu = spm_get_cpu(&pdev->dev);
+	if (cpu >= 0)
+		per_cpu(cpu_spm_drv, cpu) = drv;
+
 	if (IS_ENABLED(CONFIG_REGULATOR))
 		return spm_register_regulator(&pdev->dev, drv);
 
@@ -565,6 +584,8 @@ static struct platform_driver spm_driver = {
 	.driver = {
 		.name = "qcom_spm",
 		.of_match_table = spm_match_table,
+		/* cpuidle and CPU hotplug keep using the driver data */
+		.suppress_bind_attrs = true,
 	},
 };
 
