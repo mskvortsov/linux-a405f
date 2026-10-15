@@ -85,7 +85,7 @@ struct pm8941_pwrkey {
 };
 
 static int pm8941_reboot_notify(struct notifier_block *nb,
-				unsigned long code, void *unused)
+				unsigned long code, void *cmd)
 {
 	struct pm8941_pwrkey *pwrkey = container_of(nb, struct pm8941_pwrkey,
 						    reboot_notifier);
@@ -121,7 +121,11 @@ static int pm8941_reboot_notify(struct notifier_block *nb,
 		break;
 	case SYS_RESTART:
 	default:
-		if (reboot_mode == REBOOT_WARM)
+		/*
+		 * A reboot command (e.g. "bootloader") is usually passed to
+		 * the bootloader through memory that a hard reset would clear.
+		 */
+		if (reboot_mode == REBOOT_WARM || (cmd && *(const char *)cmd))
 			reset_type = PON_PS_HOLD_TYPE_WARM_RESET;
 		else
 			reset_type = PON_PS_HOLD_TYPE_HARD_RESET;
