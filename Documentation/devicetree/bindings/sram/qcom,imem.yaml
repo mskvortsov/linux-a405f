@@ -20,6 +20,7 @@ properties:
           - qcom,apq8064-imem
           - qcom,ipq5424-imem
           - qcom,msm8226-imem
+          - qcom,msm8610-imem
           - qcom,msm8974-imem
           - qcom,msm8976-imem
           - qcom,qcs404-imem
@@ -113,6 +114,7 @@ allOf:
             enum:
               - qcom,apq8064-imem
               - qcom,msm8226-imem
+              - qcom,msm8610-imem
               - qcom,msm8974-imem
     then:
       properties:
