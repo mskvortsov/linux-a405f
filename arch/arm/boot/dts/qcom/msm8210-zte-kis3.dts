@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+
 #include "qcom-msm8610.dtsi"
 #include "pm8110.dtsi"
 
@@ -19,6 +22,20 @@
 	chosen {
 		stdout-path = "serial0:115200n8";
 	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		pinctrl-0 = <&gpio_keys_default>;
+		pinctrl-names = "default";
+
+		key-volume-up {
+			label = "Volume Up";
+			gpios = <&tlmm 72 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <15>;
+		};
+	};
 };
 
 &blsp1_uart2 {
@@ -31,6 +48,12 @@
 
 &cpu1 {
 	cpu-supply = <&pm8110_s2>;
+};
+
+&pm8110_resin {
+	linux,code = <KEY_VOLUMEDOWN>;
+
+	status = "okay";
 };
 
 &pm8110_spmi_regulators {
@@ -131,4 +154,13 @@
 	v3p3-supply = <&pm8110_l20>;
 
 	qcom,init-seq = /bits/ 8 <0x0 0x44 0x1 0x6a 0x2 0x34 0x3 0x13>;
+};
+
+&tlmm {
+	gpio_keys_default: gpio-keys-default-state {
+		pins = "gpio72";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
 };
