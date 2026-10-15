@@ -216,6 +216,12 @@ properties:
 
       - items:
           - enum:
+              - zte,kis3
+          - const: qcom,msm8210
+          - const: qcom,msm8610
+
+      - items:
+          - enum:
               - qcom,apq8060-dragonboard
               - qcom,msm8660-surf
           - const: qcom,msm8660
