@@ -713,6 +713,15 @@ config MSM_LCC_8960
 	  Say Y if you want to use audio devices such as i2s, pcm,
 	  SLIMBus, etc.
 
+config MSM_LPASSCC_8610
+	tristate "MSM8610 LPASS Clock Controller"
+	depends on ARM || COMPILE_TEST
+	help
+	  Support for the LPASS clock controller on msm8610 devices.
+	  It provides the clocks of the digital part of the internal audio
+	  codec; the other LPASS clocks are managed by the ADSP firmware.
+	  Say Y or M if you want to use the internal audio codec.
+
 config MDM_GCC_9607
 	tristate "MDM9607 Global Clock Controller"
 	depends on ARM || COMPILE_TEST
