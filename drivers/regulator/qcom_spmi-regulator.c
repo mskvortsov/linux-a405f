@@ -2135,6 +2135,11 @@ static const struct spmi_regulator_data pm8019_regulators[] = {
 	{ }
 };
 
+static const struct spmi_regulator_data pm8110_regulators[] = {
+	{ "s2", 0x1700, "vdd_s2", },
+	{ }
+};
+
 static const struct spmi_regulator_data pm8226_regulators[] = {
 	{ "s1", 0x1400, "vdd_s1", },
 	{ "s2", 0x1700, "vdd_s2", },
@@ -2477,6 +2482,7 @@ static const struct of_device_id qcom_spmi_regulator_match[] = {
 	{ .compatible = "qcom,pm8004-regulators", .data = &pm8004_regulators },
 	{ .compatible = "qcom,pm8005-regulators", .data = &pm8005_regulators },
 	{ .compatible = "qcom,pm8019-regulators", .data = &pm8019_regulators },
+	{ .compatible = "qcom,pm8110-regulators", .data = &pm8110_regulators },
 	{ .compatible = "qcom,pm8226-regulators", .data = &pm8226_regulators },
 	{ .compatible = "qcom,pm8841-regulators", .data = &pm8841_regulators },
 	{ .compatible = "qcom,pm8909-regulators", .data = &pm8909_regulators },
