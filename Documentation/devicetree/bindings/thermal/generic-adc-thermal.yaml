@@ -24,6 +24,9 @@ properties:
   '#thermal-sensor-cells':
     const: 0
 
+  '#io-channel-cells':
+    const: 0
+
   io-channels:
     maxItems: 1
 
