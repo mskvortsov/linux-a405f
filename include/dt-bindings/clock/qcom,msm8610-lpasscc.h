@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+
+#ifndef _DT_BINDINGS_CLK_QCOM_MSM8610_LPASSCC_H
+#define _DT_BINDINGS_CLK_QCOM_MSM8610_LPASSCC_H
+
+#define DIGCODEC_CLK_SRC	0
+#define DIGCODEC_CLK		1
+#define DIGCODEC_AHB_CLK	2
+
+#endif
