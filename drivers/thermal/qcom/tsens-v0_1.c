@@ -219,6 +219,14 @@ static int __init init_8226(struct tsens_priv *priv)
 	return init_common(priv);
 }
 
+static int __init init_8610(struct tsens_priv *priv)
+{
+	priv->sensor[0].slope = 2901;
+	priv->sensor[1].slope = 2846;
+
+	return init_common(priv);
+}
+
 static int __init init_8909(struct tsens_priv *priv)
 {
 	int i;
@@ -336,6 +344,20 @@ struct tsens_plat_data data_8226 = {
 	.ops		= &ops_8226,
 	.feat		= &tsens_v0_1_feat,
 	.fields	= tsens_v0_1_regfields,
+};
+
+static const struct tsens_ops ops_8610 = {
+	.init		= init_8610,
+	.calibrate	= tsens_calibrate_common,
+	.get_temp	= get_temp_common,
+};
+
+struct tsens_plat_data data_8610 = {
+	.num_sensors	= 2,
+	.ops		= &ops_8610,
+	.feat		= &tsens_v0_1_feat,
+	.fields	= tsens_v0_1_regfields,
+	.hw_ids		= (unsigned int []){ 0, 5 },
 };
 
 static const struct tsens_ops ops_8909 = {
