@@ -33,6 +33,7 @@ properties:
           - qcom,kaanapali-qfprom
           - qcom,milos-qfprom
           - qcom,msm8226-qfprom
+          - qcom,msm8610-qfprom
           - qcom,msm8916-qfprom
           - qcom,msm8917-qfprom
           - qcom,msm8937-qfprom
