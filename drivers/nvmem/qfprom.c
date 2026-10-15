@@ -104,6 +104,18 @@ struct qfprom_soc_compatible_data {
 	unsigned int nkeepout;
 };
 
+/* Rows that only TZ can read; an access from Linux aborts */
+static const struct nvmem_keepout msm8610_qfprom_keepout[] = {
+	{.start = 0xd0, .end = 0xd8},
+	{.start = 0x1b8, .end = 0x1d0},
+	{.start = 0x1e0, .end = 0x1f0}
+};
+
+static const struct qfprom_soc_compatible_data msm8610_qfprom = {
+	.keepout = msm8610_qfprom_keepout,
+	.nkeepout = ARRAY_SIZE(msm8610_qfprom_keepout)
+};
+
 static const struct nvmem_keepout sc7180_qfprom_keepout[] = {
 	{.start = 0x128, .end = 0x148},
 	{.start = 0x220, .end = 0x228}
@@ -458,6 +470,7 @@ static int qfprom_probe(struct platform_device *pdev)
 
 static const struct of_device_id qfprom_of_match[] = {
 	{ .compatible = "qcom,qfprom",},
+	{ .compatible = "qcom,msm8610-qfprom", .data = &msm8610_qfprom},
 	{ .compatible = "qcom,sc7180-qfprom", .data = &sc7180_qfprom},
 	{ .compatible = "qcom,sc7280-qfprom", .data = &sc7280_qfprom},
 	{/* sentinel */},
