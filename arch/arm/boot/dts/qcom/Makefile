@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 dtb-$(CONFIG_ARCH_QCOM) += \
+	msm8210-zte-kis3.dtb \
 	msm8226-motorola-falcon.dtb \
 	msm8226-motorola-titan.dtb \
 	msm8926-sony-xperia-yukon-eagle.dtb \

@@ -1,0 +1,107 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include "qcom-msm8610.dtsi"
+#include "pm8110.dtsi"
+
+/ {
+	model = "ZTE Open C / Kis 3";
+	compatible = "zte,kis3", "qcom,msm8210", "qcom,msm8610";
+	chassis-type = "handset";
+
+	qcom,msm-id = <162 0x10001>;
+	qcom,board-id = <11 0>;
+
+	aliases {
+		mmc0 = &sdhc_1;
+		serial0 = &blsp1_uart2;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+};
+
+&blsp1_uart2 {
+	status = "okay";
+};
+
+&rpm_requests {
+	regulators {
+		compatible = "qcom,rpm-pm8110-regulators";
+
+		/*
+		 * Only rails with a known use are listed, at the downstream
+		 * voltages; the rest are left to the RPM and other masters.
+		 */
+
+		/* DSI; no display driver yet, keep the bootloader setup alive */
+		pm8110_l4: l4 {
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-always-on;
+		};
+
+		/* 1.8V I/O: eMMC pads, display, audio, WCNSS */
+		pm8110_l6: l6 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-always-on;
+		};
+
+		/* PLLs (incl. CPU), USB PHY, WCNSS */
+		pm8110_l10: l10 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-always-on;
+		};
+
+		/* Panel and I2C peripherals I/O */
+		pm8110_l14: l14 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-always-on;
+		};
+
+		/* eMMC */
+		pm8110_l17: l17 {
+			regulator-min-microvolt = <2900000>;
+			regulator-max-microvolt = <2900000>;
+			regulator-always-on;
+		};
+
+		/* DSI analog, sensors */
+		pm8110_l19: l19 {
+			regulator-min-microvolt = <2850000>;
+			regulator-max-microvolt = <2850000>;
+			regulator-always-on;
+		};
+
+		/* USB PHY */
+		pm8110_l20: l20 {
+			regulator-min-microvolt = <3075000>;
+			regulator-max-microvolt = <3075000>;
+		};
+	};
+};
+
+&sdhc_1 {
+	vmmc-supply = <&pm8110_l17>;
+	vqmmc-supply = <&pm8110_l6>;
+
+	status = "okay";
+};
+
+&usb {
+	dr_mode = "peripheral";
+	extcon = <&pm8110_usb_vbus>;
+
+	status = "okay";
+};
+
+&usb_hs_phy {
+	extcon = <&pm8110_usb_vbus>;
+	v1p8-supply = <&pm8110_l10>;
+	v3p3-supply = <&pm8110_l20>;
+
+	qcom,init-seq = /bits/ 8 <0x0 0x44 0x1 0x6a 0x2 0x34 0x3 0x13>;
+};
