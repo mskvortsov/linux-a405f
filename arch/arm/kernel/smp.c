@@ -242,8 +242,13 @@ static void ipi_teardown(int cpu)
 	if (WARN_ON_ONCE(!ipi_irq_base))
 		return;
 
+	/*
+	 * Keep IPI_WAKEUP enabled: some platforms bring an offline CPU back
+	 * by sending it this IPI, see arch_send_wakeup_ipi_mask().
+	 */
 	for (i = 0; i < nr_ipi; i++)
-		disable_percpu_irq(ipi_irq_base + i);
+		if (i != IPI_WAKEUP)
+			disable_percpu_irq(ipi_irq_base + i);
 }
 
 /*
