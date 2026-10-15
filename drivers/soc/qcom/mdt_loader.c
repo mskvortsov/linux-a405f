@@ -195,7 +195,15 @@ void *qcom_mdt_read_metadata(const struct firmware *fw, size_t *data_len,
 		return ERR_PTR(-EINVAL);
 	}
 
-	ehdr_size = phdrs[0].p_filesz;
+	/*
+	 * The first segment should cover the ELF and program headers, but in
+	 * some older images it leaves out the last program header, which is
+	 * part of the metadata all the same.
+	 */
+	ehdr_size = max_t(size_t, phdrs[0].p_filesz,
+			  ehdr->e_phoff + ehdr->e_phnum * sizeof(*phdrs));
+	if (ehdr_size > fw->size)
+		return ERR_PTR(-EINVAL);
 	hash_size = phdrs[hash_segment].p_filesz;
 
 	data = kmalloc(ehdr_size + hash_size, GFP_KERNEL);
@@ -207,7 +215,7 @@ void *qcom_mdt_read_metadata(const struct firmware *fw, size_t *data_len,
 
 	if (ehdr_size + hash_size == fw->size) {
 		/* Firmware is split and hash is packed following the ELF header */
-		hash_offset = phdrs[0].p_filesz;
+		hash_offset = ehdr_size;
 		memcpy(data + ehdr_size, fw->data + hash_offset, hash_size);
 	} else if (phdrs[hash_segment].p_offset + hash_size <= fw->size) {
 		/* Hash is in its own segment, but within the loaded file */
