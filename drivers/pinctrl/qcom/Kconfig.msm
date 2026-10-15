@@ -172,6 +172,15 @@ config PINCTRL_MSM8226
 	  Qualcomm Technologies Inc TLMM block found on the Qualcomm
 	  Technologies Inc MSM8226 platform.
 
+config PINCTRL_MSM8610
+	tristate "Qualcomm 8610 pin controller driver"
+	depends on ARM || COMPILE_TEST
+	default ARCH_QCOM
+	help
+	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
+	  Qualcomm Technologies Inc TLMM block found on the Qualcomm
+	  Technologies Inc MSM8610 platform.
+
 config PINCTRL_MSM8660
 	tristate "Qualcomm 8660 pin controller driver"
 	depends on ARM || COMPILE_TEST

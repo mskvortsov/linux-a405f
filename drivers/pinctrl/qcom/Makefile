@@ -19,6 +19,7 @@ obj-$(CONFIG_PINCTRL_IPQ9650)	+= pinctrl-ipq9650.o
 obj-$(CONFIG_PINCTRL_KAANAPALI) += pinctrl-kaanapali.o
 obj-$(CONFIG_PINCTRL_MAILI)	+= pinctrl-maili.o
 obj-$(CONFIG_PINCTRL_MSM8226)	+= pinctrl-msm8226.o
+obj-$(CONFIG_PINCTRL_MSM8610)	+= pinctrl-msm8610.o
 obj-$(CONFIG_PINCTRL_MSM8660)	+= pinctrl-msm8660.o
 obj-$(CONFIG_PINCTRL_MSM8960)	+= pinctrl-msm8960.o
 obj-$(CONFIG_PINCTRL_MSM8X74)	+= pinctrl-msm8x74.o
