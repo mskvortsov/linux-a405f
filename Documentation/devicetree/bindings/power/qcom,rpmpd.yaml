@@ -73,6 +73,10 @@ properties:
           - qcom,x1e80100-rpmhpd
       - items:
           - enum:
+              - qcom,msm8610-rpmpd
+          - const: qcom,msm8226-rpmpd
+      - items:
+          - enum:
               - qcom,msm8937-rpmpd
           - const: qcom,msm8917-rpmpd
       - items:
