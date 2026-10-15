@@ -25,6 +25,23 @@
 	status = "okay";
 };
 
+&cpu0 {
+	cpu-supply = <&pm8110_s2>;
+};
+
+&cpu1 {
+	cpu-supply = <&pm8110_s2>;
+};
+
+&pm8110_spmi_regulators {
+	/* CPU (APC) rail */
+	pm8110_s2: s2 {
+		regulator-min-microvolt = <1150000>;
+		regulator-max-microvolt = <1275000>;
+		regulator-always-on;
+	};
+};
+
 &rpm_requests {
 	regulators {
 		compatible = "qcom,rpm-pm8110-regulators";
@@ -33,6 +50,16 @@
 		 * Only rails with a known use are listed, at the downstream
 		 * voltages; the rest are left to the RPM and other masters.
 		 */
+
+		/*
+		 * Memory (MX) rail; must not be below the CPU corner
+		 * ceiling, which is 1.275 V for the turbo frequencies
+		 */
+		pm8110_l3: l3 {
+			regulator-min-microvolt = <1275000>;
+			regulator-max-microvolt = <1275000>;
+			regulator-always-on;
+		};
 
 		/* DSI; no display driver yet, keep the bootloader setup alive */
 		pm8110_l4: l4 {
