@@ -218,6 +218,9 @@
 				 <&gcc GCC_SDCC1_APPS_CLK>,
 				 <&xo_board>;
 			clock-names = "iface", "core", "xo";
+			pinctrl-0 = <&sdhc1_default_state>;
+			pinctrl-1 = <&sdhc1_sleep_state>;
+			pinctrl-names = "default", "sleep";
 			bus-width = <8>;
 			non-removable;
 			status = "disabled";
@@ -234,6 +237,9 @@
 				 <&gcc GCC_SDCC2_APPS_CLK>,
 				 <&xo_board>;
 			clock-names = "iface", "core", "xo";
+			pinctrl-0 = <&sdhc2_default_state>;
+			pinctrl-1 = <&sdhc2_sleep_state>;
+			pinctrl-names = "default", "sleep";
 			bus-width = <4>;
 			status = "disabled";
 		};
@@ -245,6 +251,8 @@
 			clocks = <&gcc GCC_BLSP1_UART2_APPS_CLK>,
 				 <&gcc GCC_BLSP1_AHB_CLK>;
 			clock-names = "core", "iface";
+			pinctrl-0 = <&blsp1_uart2_default_state>;
+			pinctrl-names = "default";
 			status = "disabled";
 		};
 
@@ -337,6 +345,80 @@
 			compatible = "qcom,msm8610-tcsr-mutex", "qcom,tcsr-mutex";
 			reg = <0xfd484000 0x1000>;
 			#hwlock-cells = <1>;
+		};
+
+		tlmm: pinctrl@fd510000 {
+			compatible = "qcom,msm8610-tlmm";
+			reg = <0xfd510000 0x4000>;
+			interrupts = <GIC_SPI 208 IRQ_TYPE_LEVEL_HIGH>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			gpio-ranges = <&tlmm 0 0 102>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+
+			blsp1_uart2_default_state: blsp1-uart2-default-state {
+				pins = "gpio4", "gpio5";
+				function = "blsp_uart2";
+				drive-strength = <8>;
+				bias-disable;
+			};
+
+			sdhc1_default_state: sdhc1-default-state {
+				clk-pins {
+					pins = "sdc1_clk";
+					drive-strength = <10>;
+					bias-disable;
+				};
+
+				cmd-data-pins {
+					pins = "sdc1_cmd", "sdc1_data";
+					drive-strength = <10>;
+					bias-pull-up;
+				};
+			};
+
+			sdhc1_sleep_state: sdhc1-sleep-state {
+				clk-pins {
+					pins = "sdc1_clk";
+					drive-strength = <2>;
+					bias-disable;
+				};
+
+				cmd-data-pins {
+					pins = "sdc1_cmd", "sdc1_data";
+					drive-strength = <2>;
+					bias-pull-up;
+				};
+			};
+
+			sdhc2_default_state: sdhc2-default-state {
+				clk-pins {
+					pins = "sdc2_clk";
+					drive-strength = <10>;
+					bias-disable;
+				};
+
+				cmd-data-pins {
+					pins = "sdc2_cmd", "sdc2_data";
+					drive-strength = <10>;
+					bias-pull-up;
+				};
+			};
+
+			sdhc2_sleep_state: sdhc2-sleep-state {
+				clk-pins {
+					pins = "sdc2_clk";
+					drive-strength = <2>;
+					bias-disable;
+				};
+
+				cmd-data-pins {
+					pins = "sdc2_cmd", "sdc2_data";
+					drive-strength = <2>;
+					bias-pull-up;
+				};
+			};
 		};
 	};
 
