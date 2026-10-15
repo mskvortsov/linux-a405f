@@ -36,22 +36,38 @@
 
 		cpu0: cpu@0 {
 			compatible = "arm,cortex-a7";
+			enable-method = "qcom,msm8610-smp";
 			device_type = "cpu";
 			reg = <0>;
 			next-level-cache = <&l2>;
+			qcom,acc = <&acc0>;
+			qcom,saw = <&saw0>;
 		};
 
 		cpu1: cpu@1 {
 			compatible = "arm,cortex-a7";
+			enable-method = "qcom,msm8610-smp";
 			device_type = "cpu";
 			reg = <1>;
 			next-level-cache = <&l2>;
+			qcom,acc = <&acc1>;
+			qcom,saw = <&saw1>;
 		};
 
 		l2: l2-cache {
 			compatible = "cache";
 			cache-level = <2>;
 			cache-unified;
+		};
+	};
+
+	firmware {
+		scm {
+			compatible = "qcom,scm-msm8610", "qcom,scm";
+			clocks = <&gcc GCC_CE1_CLK>,
+				 <&gcc GCC_CE1_AXI_CLK>,
+				 <&gcc GCC_CE1_AHB_CLK>;
+			clock-names = "core", "bus", "iface";
 		};
 	};
 
@@ -205,6 +221,26 @@
 				reg = <0xf9028000 0x1000>;
 				status = "disabled";
 			};
+		};
+
+		acc0: power-manager@f9088000 {
+			compatible = "qcom,kpss-acc-v2";
+			reg = <0xf9088000 0x1000>, <0xf9008000 0x1000>;
+		};
+
+		saw0: power-manager@f9089000 {
+			compatible = "qcom,msm8610-saw2-v2.1-cpu", "qcom,saw2";
+			reg = <0xf9089000 0x1000>;
+		};
+
+		acc1: power-manager@f9098000 {
+			compatible = "qcom,kpss-acc-v2";
+			reg = <0xf9098000 0x1000>, <0xf9008000 0x1000>;
+		};
+
+		saw1: power-manager@f9099000 {
+			compatible = "qcom,msm8610-saw2-v2.1-cpu", "qcom,saw2";
+			reg = <0xf9099000 0x1000>;
 		};
 
 		sdhc_1: mmc@f9824900 {
