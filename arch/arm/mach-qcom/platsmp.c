@@ -15,8 +15,10 @@
 #include <linux/smp.h>
 #include <linux/io.h>
 #include <linux/firmware/qcom/qcom_scm.h>
+#include <soc/qcom/spm.h>
 
 #include <asm/smp_plat.h>
+#include <asm/suspend.h>
 
 
 #define VDD_SC1_ARRAY_CLAMP_GFS_CTL	0x35a0
@@ -48,6 +50,36 @@ extern void secondary_startup_arm(void);
 static void qcom_cpu_die(unsigned int cpu)
 {
 	wfi();
+}
+
+static bool cortex_a7_warm_boot;
+
+static int cortex_a7_power_down(unsigned long unused)
+{
+	qcom_scm_cpu_power_down(QCOM_SCM_CPU_PWR_DOWN_L2_ON);
+
+	/* Only returns if an interrupt was pending */
+	return -1;
+}
+
+static void cortex_a7_cpu_die(unsigned int cpu)
+{
+	struct spm_driver_data *spm = spm_get_cpu_drv(cpu);
+
+	if (!IS_ENABLED(CONFIG_ARM_CPU_SUSPEND) || !cortex_a7_warm_boot || !spm) {
+		wfi();
+		return;
+	}
+
+	/*
+	 * Let the SPM power the core down. When it is woken up to come back
+	 * online, it resumes at the warm boot address (cpu_resume) and
+	 * returns from here; the caller then restarts it through
+	 * secondary_start_kernel().
+	 */
+	spm_set_low_power_mode(spm, PM_SLEEP_MODE_SPC);
+	cpu_suspend(0, cortex_a7_power_down);
+	spm_set_low_power_mode(spm, PM_SLEEP_MODE_STBY);
 }
 #endif
 
@@ -367,6 +399,16 @@ static void __init qcom_smp_prepare_cpus(unsigned int max_cpus)
 	}
 }
 
+static void __init cortex_a7_smp_prepare_cpus(unsigned int max_cpus)
+{
+	qcom_smp_prepare_cpus(max_cpus);
+
+#if defined(CONFIG_HOTPLUG_CPU) && defined(CONFIG_ARM_CPU_SUSPEND)
+	/* Also used by the SPM cpuidle driver */
+	cortex_a7_warm_boot = !qcom_scm_set_warm_boot_addr(cpu_resume_arm);
+#endif
+}
+
 static const struct smp_operations smp_msm8660_ops __initconst = {
 	.smp_prepare_cpus	= qcom_smp_prepare_cpus,
 	.smp_boot_secondary	= msm8660_boot_secondary,
@@ -377,10 +419,10 @@ static const struct smp_operations smp_msm8660_ops __initconst = {
 CPU_METHOD_OF_DECLARE(qcom_smp, "qcom,gcc-msm8660", &smp_msm8660_ops);
 
 static const struct smp_operations qcom_smp_cortex_a7_ops __initconst = {
-	.smp_prepare_cpus	= qcom_smp_prepare_cpus,
+	.smp_prepare_cpus	= cortex_a7_smp_prepare_cpus,
 	.smp_boot_secondary	= cortex_a7_boot_secondary,
 #ifdef CONFIG_HOTPLUG_CPU
-	.cpu_die		= qcom_cpu_die,
+	.cpu_die		= cortex_a7_cpu_die,
 #endif
 };
 CPU_METHOD_OF_DECLARE(qcom_smp_msm8226, "qcom,msm8226-smp", &qcom_smp_cortex_a7_ops);
