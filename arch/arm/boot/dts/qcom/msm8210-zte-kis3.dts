@@ -2,6 +2,8 @@
 
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
 
 #include "qcom-msm8610.dtsi"
 #include "pm8110.dtsi"
@@ -77,6 +79,16 @@
 		stdout-path = "serial0:115200n8";
 	};
 
+	/* Connects the earpiece to the codec EAR output */
+	earpiece_switch: audio-switch {
+		compatible = "simple-audio-amplifier";
+		enable-gpios = <&tlmm 93 GPIO_ACTIVE_HIGH>;
+		sound-name-prefix = "Earpiece Switch";
+
+		pinctrl-0 = <&earpiece_switch_default>;
+		pinctrl-names = "default";
+	};
+
 	gpio-keys {
 		compatible = "gpio-keys";
 
@@ -123,6 +135,77 @@
 					    80000    530>;
 	};
 
+	sound {
+		compatible = "qcom,msm8610-qdsp6-sndcard";
+		model = "zte-kis3";
+
+		aux-devs = <&earpiece_switch>;
+		widgets = "Speaker", "Speaker",
+			  "Speaker", "Earpiece";
+		audio-routing = "Speaker", "SPK_OUT",
+				"Earpiece Switch INL", "EAR",
+				"Earpiece", "Earpiece Switch OUTL",
+				"Headphone Jack", "HEADPHONE",
+				"AMIC1", "MIC BIAS Internal1",
+				"AMIC2", "MIC BIAS Internal2";
+
+		multimedia1-dai-link {
+			link-name = "MultiMedia1";
+
+			cpu {
+				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
+			};
+		};
+
+		multimedia2-dai-link {
+			link-name = "MultiMedia2";
+
+			cpu {
+				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>;
+			};
+		};
+
+		multimedia3-dai-link {
+			link-name = "MultiMedia3";
+
+			cpu {
+				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA3>;
+			};
+		};
+
+		secondary-mi2s-dai-link {
+			link-name = "Secondary MI2S";
+
+			cpu {
+				sound-dai = <&q6afedai SECONDARY_MI2S_RX>;
+			};
+
+			platform {
+				sound-dai = <&q6routing>;
+			};
+
+			codec {
+				sound-dai = <&wcd_codec 0>;
+			};
+		};
+
+		primary-mi2s-dai-link {
+			link-name = "Primary MI2S";
+
+			cpu {
+				sound-dai = <&q6afedai PRIMARY_MI2S_TX>;
+			};
+
+			platform {
+				sound-dai = <&q6routing>;
+			};
+
+			codec {
+				sound-dai = <&wcd_codec 1>;
+			};
+		};
+	};
+
 	thermal-zones {
 		battery-thermal {
 			polling-delay-passive = <0>;
@@ -147,6 +230,10 @@
 };
 
 &apr {
+	status = "okay";
+};
+
+&blsp1_i2c5 {
 	status = "okay";
 };
 
@@ -206,6 +293,36 @@
 	};
 };
 
+&q6afedai {
+	dai@17 {
+		reg = <PRIMARY_MI2S_TX>;
+		qcom,sd-lines = <0 1>;
+	};
+
+	dai@18 {
+		reg = <SECONDARY_MI2S_RX>;
+		qcom,sd-lines = <0 1>;
+	};
+};
+
+&q6asmdai {
+	dai@0 {
+		reg = <MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		direction = <Q6ASM_DAI_RX>;
+	};
+
+	dai@1 {
+		reg = <MSM_FRONTEND_DAI_MULTIMEDIA2>;
+		direction = <Q6ASM_DAI_TX>;
+	};
+
+	dai@2 {
+		reg = <MSM_FRONTEND_DAI_MULTIMEDIA3>;
+		direction = <Q6ASM_DAI_RX>;
+		is-compress-dai;
+	};
+};
+
 &rpm_requests {
 	regulators {
 		compatible = "qcom,rpm-pm8110-regulators";
@@ -214,6 +331,12 @@
 		 * Only rails with a known use are listed, at the downstream
 		 * voltages; the rest are left to the RPM and other masters.
 		 */
+
+		/* Audio codec charge pump */
+		pm8110_s4: s4 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <2150000>;
+		};
 
 		/*
 		 * Memory (MX) rail; must not be below the CPU corner
@@ -297,11 +420,28 @@
 	qcom,init-seq = /bits/ 8 <0x0 0x44 0x1 0x6a 0x2 0x34 0x3 0x13>;
 };
 
+&wcd_codec {
+	vdd-cp-supply = <&pm8110_s4>;
+	vdda-h-supply = <&pm8110_l6>;
+	vdd-px-supply = <&pm8110_l6>;
+	vdd-1p2-supply = <&pm8110_l4>;
+	vdd-micbias-supply = <&pm8110_l20>;
+
+	status = "okay";
+};
+
 &tlmm {
 	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio72";
 		function = "gpio";
 		drive-strength = <2>;
 		bias-pull-up;
+	};
+
+	earpiece_switch_default: earpiece-switch-default-state {
+		pins = "gpio93";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
 	};
 };
