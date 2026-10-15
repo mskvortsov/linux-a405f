@@ -140,6 +140,16 @@
 	};
 };
 
+&adsp {
+	firmware-name = "qcom/msm8610/zte/kis3/adsp.mdt";
+
+	status = "okay";
+};
+
+&apr {
+	status = "okay";
+};
+
 &blsp1_uart2 {
 	status = "okay";
 };
