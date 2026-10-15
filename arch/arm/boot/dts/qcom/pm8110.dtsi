@@ -160,6 +160,21 @@
 			#io-channel-cells = <1>;
 		};
 
+		pm8110_bms: battery@4000 {
+			compatible = "qcom,pm8110-bms";
+			reg = <0x4000>, <0x3800>;
+			io-channels = <&pm8110_vadc VADC_VBAT_SNS>,
+				      <&pm8110_vadc VADC_REF_625MV>,
+				      <&pm8110_vadc VADC_REF_1250MV>,
+				      <&pm8110_iadc 0>;
+			io-channel-names = "vbat",
+					   "ref_625mv",
+					   "ref_1250mv",
+					   "iadc";
+			power-supplies = <&pm8110_charger>;
+			status = "disabled";
+		};
+
 		rtc@6000 {
 			compatible = "qcom,pm8941-rtc";
 			reg = <0x6000>, <0x6100>;
