@@ -745,6 +745,18 @@ config CHARGER_QCOM_SMBB
 	  documentation for more detail.  The base name for this driver is
 	  'pm8941_charger'.
 
+config BATTERY_PM8110_BMS
+	tristate "Qualcomm PM8110 BMS support"
+	depends on MFD_SPMI_PMIC || COMPILE_TEST
+	depends on IIO
+	help
+	  Say Y to add support for the coulomb counting Battery Monitoring
+	  System found in the Qualcomm PM8110 PMIC. It reports the state of
+	  charge of the battery.
+
+	  To compile this driver as module, choose M here: the
+	  module will be called pm8110_bms.
+
 config BATTERY_PM8916_BMS_VM
 	tristate "Qualcomm PM8916 BMS-VM support"
 	depends on MFD_SPMI_PMIC || COMPILE_TEST
