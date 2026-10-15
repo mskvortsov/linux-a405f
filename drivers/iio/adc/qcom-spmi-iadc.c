@@ -10,12 +10,14 @@
 #include <linux/iio/iio.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
+#include <linux/math64.h>
 #include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
+#include <linux/units.h>
 
 /* IADC register and bit definition */
 #define IADC_REVISION2				0x1
@@ -311,8 +313,8 @@ static int iadc_read_raw(struct iio_dev *indio_dev,
 			 int *val, int *val2, long mask)
 {
 	struct iadc_chip *iadc = iio_priv(indio_dev);
-	s32 isense_ua, vsense_uv;
-	u16 adc_raw, vsense_raw;
+	s32 isense_ua, vsense_uv, vsense_raw;
+	u16 adc_raw;
 	int ret;
 
 	switch (mask) {
@@ -323,12 +325,13 @@ static int iadc_read_raw(struct iio_dev *indio_dev,
 		if (ret < 0)
 			return ret;
 
-		vsense_raw = adc_raw - iadc->offset[chan->channel];
+		vsense_raw = (s32)adc_raw - iadc->offset[chan->channel];
 
 		vsense_uv = vsense_raw * IADC_REF_GAIN_MICRO_VOLTS;
 		vsense_uv /= (s32)iadc->gain - iadc->offset[chan->channel];
 
-		isense_ua = vsense_uv / iadc->rsense[chan->channel];
+		isense_ua = div_s64((s64)vsense_uv * MICRO,
+				    iadc->rsense[chan->channel]);
 
 		dev_dbg(iadc->dev, "off %d gain %d adc %d %duV I %duA\n",
 			iadc->offset[chan->channel], iadc->gain,
