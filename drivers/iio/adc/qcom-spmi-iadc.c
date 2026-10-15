@@ -69,6 +69,8 @@
 #define IADC_NOMINAL_RSENSE_SIGN_MASK		BIT(7)
 
 #define IADC_REF_GAIN_MICRO_VOLTS		17857
+/* Ideal difference between the gain and offset codes */
+#define IADC_REF_GAIN_IDEAL_CODE		3291
 
 #define IADC_INT_RSENSE_DEVIATION		15625	/* nano Ohms per bit */
 
@@ -343,6 +345,14 @@ static int iadc_read_raw(struct iio_dev *indio_dev,
 		*val = 0;
 		*val2 = 1000;
 		return IIO_VAL_INT_PLUS_MICRO;
+	case IIO_CHAN_INFO_CALIBSCALE:
+		/*
+		 * Gain correction for consumers converting codes of the same
+		 * sense path themselves, like the BMS coulomb counter
+		 */
+		*val = IADC_REF_GAIN_IDEAL_CODE;
+		*val2 = (s32)iadc->gain - iadc->offset[chan->channel];
+		return IIO_VAL_FRACTIONAL;
 	}
 
 	return -EINVAL;
@@ -471,7 +481,8 @@ static const struct iio_chan_spec iadc_channels[] = {
 		.datasheet_name	= "INTERNAL_RSENSE",
 		.channel = 0,
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |
-				      BIT(IIO_CHAN_INFO_SCALE),
+				      BIT(IIO_CHAN_INFO_SCALE) |
+				      BIT(IIO_CHAN_INFO_CALIBSCALE),
 		.indexed = 1,
 	},
 	{
@@ -479,7 +490,8 @@ static const struct iio_chan_spec iadc_channels[] = {
 		.datasheet_name	= "EXTERNAL_RSENSE",
 		.channel = 1,
 		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |
-				      BIT(IIO_CHAN_INFO_SCALE),
+				      BIT(IIO_CHAN_INFO_SCALE) |
+				      BIT(IIO_CHAN_INFO_CALIBSCALE),
 		.indexed = 1,
 	},
 };

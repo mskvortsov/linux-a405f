@@ -600,6 +600,7 @@ What:		/sys/bus/iio/devices/iio:deviceX/in_anglvel_x_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_anglvel_y_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_anglvel_z_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_capacitance_calibscale
+What:		/sys/bus/iio/devices/iio:deviceX/in_currentY_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_illuminance_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_illuminance0_calibscale
 What:		/sys/bus/iio/devices/iio:deviceX/in_intensity_both_calibscale
