@@ -706,6 +706,7 @@ static int __q6asm_dai_compr_set_codec_params(struct snd_soc_component *componen
 {
 	struct snd_compr_runtime *runtime = stream->runtime;
 	struct q6asm_dai_rtd *prtd = runtime->private_data;
+	struct q6asm_aac_cfg aac_cfg;
 	struct q6asm_flac_cfg flac_cfg;
 	struct q6asm_wma_cfg wma_cfg;
 	struct q6asm_alac_cfg alac_cfg;
@@ -724,6 +725,46 @@ static int __q6asm_dai_compr_set_codec_params(struct snd_soc_component *componen
 	memcpy(&prtd->codec, codec, sizeof(*codec));
 
 	switch (codec->id) {
+	case SND_AUDIOCODEC_AAC:
+		memset(&aac_cfg, 0x0, sizeof(struct q6asm_aac_cfg));
+
+		switch (codec->format) {
+		case SND_AUDIOSTREAMFORMAT_MP2ADTS:
+		case SND_AUDIOSTREAMFORMAT_MP4ADTS:
+			aac_cfg.format = Q6ASM_AAC_FORMAT_ADTS;
+			break;
+		case SND_AUDIOSTREAMFORMAT_MP4LOAS:
+			aac_cfg.format = Q6ASM_AAC_FORMAT_LOAS;
+			break;
+		case SND_AUDIOSTREAMFORMAT_ADIF:
+			aac_cfg.format = Q6ASM_AAC_FORMAT_ADIF;
+			break;
+		case SND_AUDIOSTREAMFORMAT_RAW:
+			aac_cfg.format = Q6ASM_AAC_FORMAT_RAW;
+			break;
+		default:
+			dev_err(dev, "Unsupported AAC stream format %u\n",
+				codec->format);
+			return -EINVAL;
+		}
+
+		/*
+		 * HE-AACv2 is a superset of LC and HE-AAC, so the decoder
+		 * handles implicitly signalled SBR and PS as well.
+		 */
+		aac_cfg.aot = Q6ASM_AAC_AOT_PS;
+		aac_cfg.ch_cfg = codec->ch_in;
+		aac_cfg.sample_rate = codec->sample_rate;
+
+		ret = q6asm_stream_media_format_block_aac(prtd->audio_client,
+							  stream_id,
+							  &aac_cfg);
+		if (ret < 0) {
+			dev_err(dev, "AAC CMD Format block failed:%d\n", ret);
+			return -EIO;
+		}
+		break;
+
 	case SND_AUDIOCODEC_FLAC:
 
 		memset(&flac_cfg, 0x0, sizeof(struct q6asm_flac_cfg));
@@ -1150,12 +1191,13 @@ static int q6asm_dai_compr_get_caps(struct snd_soc_component *component,
 	caps->max_fragment_size = COMPR_PLAYBACK_MAX_FRAGMENT_SIZE;
 	caps->min_fragments = COMPR_PLAYBACK_MIN_NUM_FRAGMENTS;
 	caps->max_fragments = COMPR_PLAYBACK_MAX_NUM_FRAGMENTS;
-	caps->num_codecs = 5;
+	caps->num_codecs = 6;
 	caps->codecs[0] = SND_AUDIOCODEC_MP3;
-	caps->codecs[1] = SND_AUDIOCODEC_FLAC;
-	caps->codecs[2] = SND_AUDIOCODEC_WMA;
-	caps->codecs[3] = SND_AUDIOCODEC_ALAC;
-	caps->codecs[4] = SND_AUDIOCODEC_APE;
+	caps->codecs[1] = SND_AUDIOCODEC_AAC;
+	caps->codecs[2] = SND_AUDIOCODEC_FLAC;
+	caps->codecs[3] = SND_AUDIOCODEC_WMA;
+	caps->codecs[4] = SND_AUDIOCODEC_ALAC;
+	caps->codecs[5] = SND_AUDIOCODEC_APE;
 
 	return 0;
 }
