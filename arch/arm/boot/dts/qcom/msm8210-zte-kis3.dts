@@ -249,6 +249,16 @@
 	cpu-supply = <&pm8110_s2>;
 };
 
+&modem {
+	mx-supply = <&pm8110_l3>;
+	pll-supply = <&pm8110_l10>;
+
+	firmware-name = "qcom/msm8610/zte/kis3/mba.b00",
+			"qcom/msm8610/zte/kis3/modem.mdt";
+
+	status = "okay";
+};
+
 &pm8110_bms {
 	io-channels = <&pm8110_vadc VADC_VBAT_SNS>,
 		      <&pm8110_vadc VADC_REF_625MV>,
