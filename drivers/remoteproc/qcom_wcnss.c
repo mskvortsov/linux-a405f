@@ -445,19 +445,15 @@ static int wcnss_init_regulators(struct qcom_wcnss *wcnss,
 {
 	const struct wcnss_vreg_info *info = data->vregs;
 	struct regulator_bulk_data *bulk;
-	size_t i, possible_pds = 0, num_vregs = data->num_vregs;
+	size_t i, num_vregs = data->num_vregs;
 	int ret;
-
-	for (i = 0; i < WCNSS_MAX_PDS; i++)
-		if (data->pd_names[i])
-			possible_pds++;
 
 	/*
 	 * If attaching the power domains suceeded we can skip requesting
 	 * the regulators for the power domains. For old device trees we need to
 	 * reserve extra space to manage them through the regulator interface.
 	 */
-	if (possible_pds >= num_vregs) {
+	if (!data->num_pd_vregs) {
 		/* Do nothing if vregs do not include PD regulators (pronto-v3) */
 	} else if (wcnss->num_pds) {
 		info += wcnss->num_pds;
