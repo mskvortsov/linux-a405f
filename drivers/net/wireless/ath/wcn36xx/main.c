@@ -626,13 +626,20 @@ out:
 	return ret;
 }
 
+static bool wcn36xx_use_scan_offload(struct wcn36xx *wcn)
+{
+	return !wcn->scan_offload_broken &&
+	       wcn36xx_firmware_get_feat_caps(wcn->fw_feat_caps, SCAN_OFFLOAD);
+}
+
 static int wcn36xx_hw_scan(struct ieee80211_hw *hw,
 			   struct ieee80211_vif *vif,
 			   struct ieee80211_scan_request *hw_req)
 {
 	struct wcn36xx *wcn = hw->priv;
+	int ret;
 
-	if (!wcn36xx_firmware_get_feat_caps(wcn->fw_feat_caps, SCAN_OFFLOAD)) {
+	if (!wcn36xx_use_scan_offload(wcn)) {
 		/* fallback to mac80211 software scan */
 		return 1;
 	}
@@ -657,8 +664,26 @@ static int wcn36xx_hw_scan(struct ieee80211_hw *hw,
 
 	mutex_unlock(&wcn->scan_lock);
 
-	wcn36xx_smd_update_channel_list(wcn, &hw_req->req);
-	return wcn36xx_smd_start_hw_scan(wcn, vif, &hw_req->req);
+	ret = wcn36xx_smd_update_channel_list(wcn, &hw_req->req);
+	if (ret != -ETIME)
+		ret = wcn36xx_smd_start_hw_scan(wcn, vif, &hw_req->req);
+	if (!ret)
+		wcn->scan_offload_works = true;
+	if (ret != -ETIME)
+		return ret;
+
+	/*
+	 * Some older Pronto firmware (e.g. on MSM8610) advertises
+	 * SCAN_OFFLOAD, but never answers the scan offload requests.
+	 */
+	wcn36xx_warn("Firmware scan offload does not respond, using software scan\n");
+	wcn->scan_offload_broken = true;
+
+	mutex_lock(&wcn->scan_lock);
+	wcn->scan_req = NULL;
+	mutex_unlock(&wcn->scan_lock);
+
+	return 1;
 }
 
 static void wcn36xx_cancel_hw_scan(struct ieee80211_hw *hw,
@@ -670,7 +695,7 @@ static void wcn36xx_cancel_hw_scan(struct ieee80211_hw *hw,
 	wcn->scan_aborted = true;
 	mutex_unlock(&wcn->scan_lock);
 
-	if (wcn36xx_firmware_get_feat_caps(wcn->fw_feat_caps, SCAN_OFFLOAD)) {
+	if (wcn36xx_use_scan_offload(wcn)) {
 		/* ieee80211_scan_completed will be called on FW scan
 		 * indication */
 		wcn36xx_smd_stop_hw_scan(wcn);

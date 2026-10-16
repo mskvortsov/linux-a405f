@@ -219,6 +219,10 @@ struct wcn36xx {
 	u8			fw_minor;
 	u8			fw_major;
 	u32			fw_feat_caps[WCN36XX_HAL_CAPS_SIZE];
+	/* SCAN_OFFLOAD is advertised, but the scan requests time out */
+	bool			scan_offload_broken;
+	/* The firmware has answered the scan offload requests */
+	bool			scan_offload_works;
 	bool			is_pronto;
 	bool			is_pronto_v3;
 

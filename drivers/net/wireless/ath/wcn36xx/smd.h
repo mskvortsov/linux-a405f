@@ -25,6 +25,12 @@
 #define WCN36XX_HAL_BUF_SIZE				4096
 
 #define HAL_MSG_TIMEOUT 10000
+/*
+ * Scan offload requests until the firmware has answered one: some firmware
+ * advertises SCAN_OFFLOAD but never answers, and the scan request that waits
+ * holds the RTNL. Responses normally take a few milliseconds.
+ */
+#define HAL_SCAN_OFFLOAD_PROBE_TIMEOUT 1000
 #define WCN36XX_SMSM_WLAN_TX_ENABLE			0x00000400
 #define WCN36XX_SMSM_WLAN_TX_RINGS_EMPTY		0x00000200
 /* The PNO version info be contained in the rsp msg */

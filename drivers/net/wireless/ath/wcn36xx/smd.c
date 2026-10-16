@@ -419,7 +419,8 @@ static void wcn36xx_smd_set_sta_params(struct wcn36xx *wcn,
 	}
 }
 
-static int wcn36xx_smd_send_and_wait(struct wcn36xx *wcn, size_t len)
+static int __wcn36xx_smd_send_and_wait(struct wcn36xx *wcn, size_t len,
+				       unsigned int timeout)
 {
 	int ret;
 	unsigned long start;
@@ -437,9 +438,9 @@ static int wcn36xx_smd_send_and_wait(struct wcn36xx *wcn, size_t len)
 		goto out;
 	}
 	if (wait_for_completion_timeout(&wcn->hal_rsp_compl,
-		msecs_to_jiffies(HAL_MSG_TIMEOUT)) <= 0) {
-		wcn36xx_err("Timeout! No SMD response to req %d in %dms\n",
-			    req_type, HAL_MSG_TIMEOUT);
+		msecs_to_jiffies(timeout)) <= 0) {
+		wcn36xx_err("Timeout! No SMD response to req %d in %ums\n",
+			    req_type, timeout);
 		ret = -ETIME;
 		goto out;
 	}
@@ -449,6 +450,20 @@ static int wcn36xx_smd_send_and_wait(struct wcn36xx *wcn, size_t len)
 		    jiffies_to_msecs(jiffies - start));
 out:
 	return ret;
+}
+
+static int wcn36xx_smd_send_and_wait(struct wcn36xx *wcn, size_t len)
+{
+	return __wcn36xx_smd_send_and_wait(wcn, len, HAL_MSG_TIMEOUT);
+}
+
+static int wcn36xx_smd_send_and_wait_scan_offload(struct wcn36xx *wcn,
+						  size_t len)
+{
+	return __wcn36xx_smd_send_and_wait(wcn, len,
+					   wcn->scan_offload_works ?
+					   HAL_MSG_TIMEOUT :
+					   HAL_SCAN_OFFLOAD_PROBE_TIMEOUT);
 }
 
 #define __INIT_HAL_MSG(msg_body, type, version) \
@@ -893,7 +908,7 @@ int wcn36xx_smd_start_hw_scan(struct wcn36xx *wcn, struct ieee80211_vif *vif,
 		    msg_body->num_channel, msg_body->num_ssid,
 		    msg_body->p2p_search ? "yes" : "no");
 
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body->header.len);
+	ret = wcn36xx_smd_send_and_wait_scan_offload(wcn, msg_body->header.len);
 	if (ret) {
 		wcn36xx_err("Sending hal_start_scan_offload failed\n");
 		goto out;
@@ -999,7 +1014,7 @@ int wcn36xx_smd_update_channel_list(struct wcn36xx *wcn, struct cfg80211_scan_re
 
 	PREPARE_HAL_BUF(wcn->hal_buf, (*msg_body));
 
-	ret = wcn36xx_smd_send_and_wait(wcn, msg_body->header.len);
+	ret = wcn36xx_smd_send_and_wait_scan_offload(wcn, msg_body->header.len);
 	if (ret) {
 		wcn36xx_err("Sending hal_update_channel_list failed\n");
 		goto out;
