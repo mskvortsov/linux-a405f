@@ -293,6 +293,24 @@
 	};
 };
 
+&pronto {
+	vddmx-supply = <&pm8110_l3>;
+	vddpx-supply = <&pm8110_l6>;
+
+	firmware-name = "qcom/msm8610/zte/kis3/wcnss.mdt";
+
+	status = "okay";
+
+	iris {
+		compatible = "qcom,wcn3620";
+
+		vddxo-supply = <&pm8110_l10>;
+		vddrfa-supply = <&pm8110_l5>;
+		vddpa-supply = <&pm8110_l16>;
+		vdddig-supply = <&pm8110_l5>;
+	};
+};
+
 &q6afedai {
 	dai@17 {
 		reg = <PRIMARY_MI2S_TX>;
@@ -355,6 +373,12 @@
 			regulator-always-on;
 		};
 
+		/* WCN3620 RF and digital */
+		pm8110_l5: l5 {
+			regulator-min-microvolt = <1300000>;
+			regulator-max-microvolt = <1300000>;
+		};
+
 		/* 1.8V I/O: eMMC pads, display, audio, WCNSS */
 		pm8110_l6: l6 {
 			regulator-min-microvolt = <1800000>;
@@ -374,6 +398,12 @@
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1800000>;
 			regulator-always-on;
+		};
+
+		/* WCN3620 PA */
+		pm8110_l16: l16 {
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
 		};
 
 		/* eMMC */
@@ -428,6 +458,10 @@
 	vdd-micbias-supply = <&pm8110_l20>;
 
 	status = "okay";
+};
+
+&wcnss_ctrl {
+	firmware-name = "qcom/msm8610/zte/kis3/WCNSS_qcom_wlan_nv.bin";
 };
 
 &tlmm {
