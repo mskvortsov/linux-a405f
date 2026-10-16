@@ -28,6 +28,10 @@ properties:
           - qcom,msm8953-mss-pil
           - qcom,msm8974-mss-pil
 
+      - items:
+          - const: qcom,msm8610-mss-pil
+          - const: qcom,msm8226-mss-pil
+
       - const: qcom,q6v5-pil
         description: Deprecated, prefer using qcom,msm8916-mss-pil
         deprecated: true
@@ -270,7 +274,8 @@ allOf:
   - if:
       properties:
         compatible:
-          const: qcom,msm8226-mss-pil
+          contains:
+            const: qcom,msm8226-mss-pil
     then:
       required:
         - qcom,ext-bhs-reg
