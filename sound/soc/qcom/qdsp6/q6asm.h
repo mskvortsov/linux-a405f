@@ -34,6 +34,21 @@ enum {
 #define FORMAT_LINEAR_PCM   0x0000
 #define ASM_LAST_BUFFER_FLAG           BIT(30)
 
+#define Q6ASM_AAC_FORMAT_ADTS	0
+#define Q6ASM_AAC_FORMAT_LOAS	1
+#define Q6ASM_AAC_FORMAT_ADIF	2
+#define Q6ASM_AAC_FORMAT_RAW	3
+
+/* AAC audio object type: HE-AACv2 (parametric stereo) */
+#define Q6ASM_AAC_AOT_PS	29
+
+struct q6asm_aac_cfg {
+	u32 sample_rate;
+	u16 format;
+	u16 aot;
+	u16 ch_cfg;
+};
+
 struct q6asm_flac_cfg {
 	u32 sample_rate;
 	u32 ext_sample_rate;
@@ -115,6 +130,9 @@ int q6asm_media_format_block_multi_ch_pcm(struct audio_client *ac,
 					  uint32_t rate, uint32_t channels,
 					  u8 channel_map[PCM_MAX_NUM_CHANNEL],
 					  uint16_t bits_per_sample);
+int q6asm_stream_media_format_block_aac(struct audio_client *ac,
+					uint32_t stream_id,
+					struct q6asm_aac_cfg *cfg);
 int q6asm_stream_media_format_block_flac(struct audio_client *ac,
 					 uint32_t stream_id,
 					 struct q6asm_flac_cfg *cfg);

@@ -41,6 +41,7 @@
 #define ASM_SESSION_CMD_RUN_V2			0x00010DAA
 #define ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V2	0x00010DA5
 #define ASM_MEDIA_FMT_MP3			0x00010BE9
+#define ASM_MEDIA_FMT_AAC_V2			0x00010DA6
 #define ASM_MEDIA_FMT_FLAC			0x00010C16
 #define ASM_MEDIA_FMT_WMA_V9			0x00010DA8
 #define ASM_MEDIA_FMT_WMA_V10			0x00010DA7
@@ -97,6 +98,15 @@ struct asm_multi_channel_pcm_fmt_blk_v2 {
 	u16 is_signed;
 	u16 reserved;
 	u8 channel_mapping[PCM_MAX_NUM_CHANNEL];
+} __packed;
+
+struct asm_aac_fmt_blk_v2 {
+	struct asm_data_cmd_media_fmt_update_v2 fmt_blk;
+	u16 aac_fmt_flag;
+	u16 audio_objype;
+	u16 channel_config;
+	u16 total_size_of_PCE_bits;
+	u32 sample_rate;
 } __packed;
 
 struct asm_flac_fmt_blk_v2 {
@@ -955,6 +965,9 @@ int q6asm_open_write(struct audio_client *ac, uint32_t stream_id,
 	case FORMAT_LINEAR_PCM:
 		open->dec_fmt_id = ASM_MEDIA_FMT_MULTI_CHANNEL_PCM_V2;
 		break;
+	case SND_AUDIOCODEC_AAC:
+		open->dec_fmt_id = ASM_MEDIA_FMT_AAC_V2;
+		break;
 	case SND_AUDIOCODEC_FLAC:
 		open->dec_fmt_id = ASM_MEDIA_FMT_FLAC;
 		break;
@@ -1120,6 +1133,36 @@ int q6asm_media_format_block_multi_ch_pcm(struct audio_client *ac,
 	return q6asm_ac_send_cmd_sync(ac, pkt);
 }
 EXPORT_SYMBOL_GPL(q6asm_media_format_block_multi_ch_pcm);
+
+int q6asm_stream_media_format_block_aac(struct audio_client *ac,
+					uint32_t stream_id,
+					struct q6asm_aac_cfg *cfg)
+{
+	struct asm_aac_fmt_blk_v2 *fmt;
+	struct apr_pkt *pkt;
+	int pkt_size = APR_HDR_SIZE + sizeof(*fmt);
+
+	void *p __free(kfree) = kzalloc(pkt_size, GFP_KERNEL);
+	if (!p)
+		return -ENOMEM;
+
+	pkt = p;
+	fmt = p + APR_HDR_SIZE;
+
+	q6asm_add_hdr(ac, &pkt->hdr, pkt_size, true, stream_id);
+
+	pkt->hdr.opcode = ASM_DATA_CMD_MEDIA_FMT_UPDATE_V2;
+	fmt->fmt_blk.fmt_blk_size = sizeof(*fmt) - sizeof(fmt->fmt_blk);
+	fmt->aac_fmt_flag = cfg->format;
+	fmt->audio_objype = cfg->aot;
+	fmt->channel_config = cfg->ch_cfg;
+	/* zero: the program config element, if any, is in the bitstream */
+	fmt->total_size_of_PCE_bits = 0;
+	fmt->sample_rate = cfg->sample_rate;
+
+	return q6asm_ac_send_cmd_sync(ac, pkt);
+}
+EXPORT_SYMBOL_GPL(q6asm_stream_media_format_block_aac);
 
 int q6asm_stream_media_format_block_flac(struct audio_client *ac,
 					 uint32_t stream_id,
