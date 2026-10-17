@@ -210,6 +210,42 @@ struct fastrpc_invoke_rsp {
 	int retval;		/* invoke return value */
 };
 
+/*
+ * Legacy ABI of the ADSP.BF.2.x firmware (MSM8974 generation), which
+ * talks over SMD: all fields are 32 bits wide, and the first page of the
+ * page list describes the argument buffer itself.
+ */
+struct fastrpc_legacy_msg {
+	u32 pid;		/* process group id */
+	u32 tid;		/* thread id */
+	u32 ctx;		/* invoke caller context */
+	u32 handle;		/* handle to invoke */
+	u32 sc;			/* scalars structure describing the data */
+	u32 addr;		/* argument buffer address */
+	u32 size;		/* argument buffer size */
+};
+
+struct fastrpc_legacy_rsp {
+	u32 ctx;		/* invoke caller context */
+	s32 retval;		/* invoke return value */
+};
+
+union fastrpc_legacy_remote_arg {
+	struct {
+		u32 pv;		/* buffer pointer, only the page offset matters */
+		u32 len;	/* length of buffer */
+	} buf;
+	u32 h;			/* remote handle */
+};
+
+struct fastrpc_legacy_phy_page {
+	u32 addr;		/* physical address */
+	u32 size;		/* size of contiguous region */
+};
+
+#define FASTRPC_LEGACY_ALIGN	32
+#define FASTRPC_LEGACY_MAX_MSG	SZ_8M
+
 struct fastrpc_buf_overlap {
 	u64 start;
 	u64 end;
@@ -299,6 +335,7 @@ struct fastrpc_soc_data {
 	u32 dma_addr_bits_cdsp;
 	u32 dma_addr_bits_default;
 	bool poll_mode_supported;
+	bool legacy_abi;
 };
 
 struct fastrpc_channel_ctx {
@@ -1077,6 +1114,114 @@ static struct fastrpc_phy_page *fastrpc_phy_page_start(struct fastrpc_invoke_buf
 	return (struct fastrpc_phy_page *)(&buf[len]);
 }
 
+/*
+ * Legacy argument buffer layout:
+ *
+ * remote args[nscalars] | invoke bufs[nbufs] | pages[1 + nbufs] | buffers
+ *
+ * pages[0] covers the whole argument buffer, pages[1 + i] buffer i. All
+ * buffers are copied into the argument buffer, each aligned to
+ * FASTRPC_LEGACY_ALIGN.
+ */
+static u32 fastrpc_legacy_meta_size(struct fastrpc_invoke_ctx *ctx)
+{
+	return sizeof(union fastrpc_legacy_remote_arg) * ctx->nscalars +
+	       sizeof(struct fastrpc_invoke_buf) * ctx->nbufs +
+	       sizeof(struct fastrpc_legacy_phy_page) * (1 + ctx->nbufs);
+}
+
+/* Offset of buffer @idx in the argument buffer, or the total size for nbufs */
+static u64 fastrpc_legacy_buf_offset(struct fastrpc_invoke_ctx *ctx, int idx)
+{
+	u64 off = ALIGN(fastrpc_legacy_meta_size(ctx), FASTRPC_LEGACY_ALIGN);
+	int i;
+
+	for (i = 0; i < idx; i++)
+		off += ALIGN(ctx->args[i].length, FASTRPC_LEGACY_ALIGN);
+
+	return off;
+}
+
+static int fastrpc_legacy_get_args(u32 kernel, struct fastrpc_invoke_ctx *ctx)
+{
+	struct device *dev = ctx->fl->sctx->dev;
+	union fastrpc_legacy_remote_arg *rpra;
+	struct fastrpc_legacy_phy_page *pages;
+	struct fastrpc_invoke_buf *list;
+	int inbufs, i, err;
+	u64 pkt_size;
+
+	inbufs = REMOTE_SCALARS_INBUFS(ctx->sc);
+	pkt_size = fastrpc_legacy_buf_offset(ctx, ctx->nbufs);
+	if (pkt_size > FASTRPC_LEGACY_MAX_MSG)
+		return -E2BIG;
+
+	ctx->msg_sz = pkt_size;
+	err = fastrpc_remote_heap_alloc(ctx->fl, dev, pkt_size, &ctx->buf);
+	if (err)
+		return err;
+
+	memset(ctx->buf->virt, 0, pkt_size);
+	rpra = ctx->buf->virt;
+	list = (struct fastrpc_invoke_buf *)&rpra[ctx->nscalars];
+	pages = (struct fastrpc_legacy_phy_page *)&list[ctx->nbufs];
+
+	pages[0].addr = ctx->buf->dma_addr;
+	pages[0].size = PAGE_ALIGN(pkt_size);
+
+	for (i = 0; i < ctx->nbufs; i++) {
+		u64 len = ctx->args[i].length;
+		u64 off = fastrpc_legacy_buf_offset(ctx, i);
+		dma_addr_t addr = ctx->buf->dma_addr + off;
+		void *dst = ctx->buf->virt + off;
+
+		rpra[i].buf.len = len;
+		if (!len)
+			continue;
+
+		rpra[i].buf.pv = addr;
+		list[i].num = 1;
+		list[i].pgidx = 1 + i;
+		pages[1 + i].addr = addr & PAGE_MASK;
+		pages[1 + i].size = PAGE_ALIGN(offset_in_page(addr) + len);
+
+		if (i >= inbufs)
+			continue;
+
+		if (!kernel) {
+			if (copy_from_user(dst, u64_to_user_ptr(ctx->args[i].ptr), len))
+				return -EFAULT;
+		} else {
+			memcpy(dst, (void *)(uintptr_t)ctx->args[i].ptr, len);
+		}
+	}
+
+	for (i = ctx->nbufs; i < ctx->nscalars; i++)
+		rpra[i].h = ctx->args[i].fd;
+
+	return 0;
+}
+
+static int fastrpc_legacy_put_args(struct fastrpc_invoke_ctx *ctx, u32 kernel)
+{
+	union fastrpc_legacy_remote_arg *rpra = ctx->buf->virt;
+	int i;
+
+	for (i = REMOTE_SCALARS_INBUFS(ctx->sc); i < ctx->nbufs; i++) {
+		void *src = ctx->buf->virt + fastrpc_legacy_buf_offset(ctx, i);
+		u64 len = min_t(u64, rpra[i].buf.len, ctx->args[i].length);
+
+		if (!kernel) {
+			if (copy_to_user(u64_to_user_ptr(ctx->args[i].ptr), src, len))
+				return -EFAULT;
+		} else {
+			memcpy((void *)(uintptr_t)ctx->args[i].ptr, src, len);
+		}
+	}
+
+	return 0;
+}
+
 static int fastrpc_get_args(u32 kernel, struct fastrpc_invoke_ctx *ctx)
 {
 	struct device *dev = ctx->fl->sctx->dev;
@@ -1088,6 +1233,9 @@ static int fastrpc_get_args(u32 kernel, struct fastrpc_invoke_ctx *ctx)
 	u64 pg_start, pg_end;
 	uintptr_t args;
 	int metalen;
+
+	if (ctx->cctx->soc_data->legacy_abi)
+		return fastrpc_legacy_get_args(kernel, ctx);
 
 	inbufs = REMOTE_SCALARS_INBUFS(ctx->sc);
 	metalen = fastrpc_get_meta_size(ctx);
@@ -1220,6 +1368,9 @@ static int fastrpc_put_args(struct fastrpc_invoke_ctx *ctx,
 	int i, inbufs;
 	int ret = 0;
 
+	if (ctx->cctx->soc_data->legacy_abi)
+		return fastrpc_legacy_put_args(ctx, kernel);
+
 	inbufs = REMOTE_SCALARS_INBUFS(ctx->sc);
 
 	for (i = inbufs; i < ctx->nbufs; ++i) {
@@ -1274,7 +1425,21 @@ static int fastrpc_invoke_send(struct fastrpc_session_ctx *sctx,
 	msg->size = roundup(ctx->msg_sz, PAGE_SIZE);
 	fastrpc_context_get(ctx);
 
-	ret = rpmsg_send(cctx->rpdev->ept, (void *)msg, sizeof(*msg));
+	if (cctx->soc_data->legacy_abi) {
+		struct fastrpc_legacy_msg lmsg = {
+			.pid = msg->client_id,
+			.tid = msg->tid,
+			.ctx = msg->ctx,
+			.handle = msg->handle,
+			.sc = msg->sc,
+			.addr = msg->addr,
+			.size = msg->size,
+		};
+
+		ret = rpmsg_send(cctx->rpdev->ept, &lmsg, sizeof(lmsg));
+	} else {
+		ret = rpmsg_send(cctx->rpdev->ept, (void *)msg, sizeof(*msg));
+	}
 
 	if (ret)
 		fastrpc_context_put(ctx);
@@ -1700,6 +1865,13 @@ static struct fastrpc_session_ctx *fastrpc_session_alloc(
 			session = &cctx->session[i];
 			/* any non-zero ID will work, session_idx + 1 is the simplest one */
 			fl->client_id = i + 1;
+			/*
+			 * Legacy firmware keeps a process group alive until all
+			 * of its calls have returned, so give each process its
+			 * own ID like the downstream driver did
+			 */
+			if (cctx->soc_data->legacy_abi)
+				fl->client_id = current->tgid;
 			break;
 		}
 	}
@@ -2311,6 +2483,23 @@ static long fastrpc_device_ioctl(struct file *file, unsigned int cmd,
 	char __user *argp = (char __user *)arg;
 	int err;
 
+	/*
+	 * Legacy firmware has neither dynamic processes nor the newer memory
+	 * mapping and capability methods
+	 */
+	if (fl->cctx->soc_data->legacy_abi) {
+		switch (cmd) {
+		case FASTRPC_IOCTL_INIT_CREATE_STATIC:
+		case FASTRPC_IOCTL_INIT_CREATE:
+		case FASTRPC_IOCTL_MMAP:
+		case FASTRPC_IOCTL_MUNMAP:
+		case FASTRPC_IOCTL_MEM_MAP:
+		case FASTRPC_IOCTL_MEM_UNMAP:
+		case FASTRPC_IOCTL_GET_DSP_INFO:
+			return -EOPNOTSUPP;
+		}
+	}
+
 	switch (cmd) {
 	case FASTRPC_IOCTL_INVOKE:
 		err = fastrpc_invoke(fl, argp);
@@ -2510,6 +2699,13 @@ static const struct fastrpc_soc_data default_soc_data = {
 	.dma_addr_bits_default = 32,
 };
 
+static const struct fastrpc_soc_data msm8610_soc_data = {
+	.sid_pos = 32,
+	.dma_addr_bits_cdsp = 32,
+	.dma_addr_bits_default = 32,
+	.legacy_abi = true,
+};
+
 /*
  * Exception list for older platforms that use default_soc_data but whose
  * DSP firmware supports FastRPC polling mode.
@@ -2642,6 +2838,15 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 	data->rpdev = rpdev;
 	dev_set_drvdata(&rpdev->dev, data);
 
+	/* Legacy DSPs have no SMMU, so the sessions share the channel device */
+	if (soc_data->legacy_abi) {
+		for (i = 0; i < FASTRPC_MAX_SESSIONS; i++) {
+			data->session[i].dev = rdev;
+			data->session[i].valid = true;
+		}
+		data->sesscount = FASTRPC_MAX_SESSIONS;
+	}
+
 	err = of_platform_populate(rdev->of_node, NULL, NULL, rdev);
 	if (err)
 		goto err_deregister_fdev;
@@ -2707,15 +2912,28 @@ static int fastrpc_rpmsg_callback(struct rpmsg_device *rpdev, void *data,
 {
 	struct fastrpc_channel_ctx *cctx = dev_get_drvdata(&rpdev->dev);
 	struct fastrpc_invoke_rsp *rsp = data;
+	struct fastrpc_invoke_rsp legacy_rsp;
 	struct fastrpc_invoke_ctx *ctx;
 	unsigned long flags;
 	unsigned long ctxid;
-
-	if (len < sizeof(*rsp))
-		return -EINVAL;
+	u64 expected;
 
 	if (!cctx)
 		return -ENODEV;
+
+	if (cctx->soc_data->legacy_abi) {
+		struct fastrpc_legacy_rsp *lrsp = data;
+
+		if (len < sizeof(*lrsp))
+			return -EINVAL;
+
+		/* Only the low 32 bits of the context made the round trip */
+		legacy_rsp.ctx = lrsp->ctx;
+		legacy_rsp.retval = lrsp->retval;
+		rsp = &legacy_rsp;
+	} else if (len < sizeof(*rsp)) {
+		return -EINVAL;
+	}
 
 	/*
 	 * A PD exit notification from the DSP PD notification framework carries
@@ -2744,12 +2962,16 @@ static int fastrpc_rpmsg_callback(struct rpmsg_device *rpdev, void *data,
 	 * driver would call complete() on the wrong context, waking a thread
 	 * whose buffers are still being accessed by the DSP.
 	 */
+	expected = ctx->ctxid;
+	if (cctx->soc_data->legacy_abi)
+		expected = lower_32_bits(expected);
+
 	if (FIELD_GET(FASTRPC_CTXID_SEQ_MASK, rsp->ctx) !=
-	    FIELD_GET(FASTRPC_CTXID_SEQ_MASK, ctx->ctxid)) {
+	    FIELD_GET(FASTRPC_CTXID_SEQ_MASK, expected)) {
 		dev_dbg(&rpdev->dev,
 			"Stale glink response ctx 0x%llx (expected seq 0x%llx), dropping\n",
 			rsp->ctx,
-			FIELD_GET(FASTRPC_CTXID_SEQ_MASK, ctx->ctxid));
+			FIELD_GET(FASTRPC_CTXID_SEQ_MASK, expected));
 		return 0;
 	}
 
@@ -2769,6 +2991,7 @@ static int fastrpc_rpmsg_callback(struct rpmsg_device *rpdev, void *data,
 
 static const struct of_device_id fastrpc_rpmsg_of_match[] = {
 	{ .compatible = "qcom,kaanapali-fastrpc", .data = &kaanapali_soc_data },
+	{ .compatible = "qcom,msm8610-fastrpc", .data = &msm8610_soc_data },
 	{ .compatible = "qcom,fastrpc", .data = &default_soc_data },
 	{ }
 };
