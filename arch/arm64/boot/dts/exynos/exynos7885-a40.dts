@@ -508,6 +508,17 @@
 		memory-region = <&gnss_rmem>;
 		status = "okay";
 	};
+
+	/*
+	 * CP (modem) PMU-only bring-up probe, see gnss.md and
+	 * drivers/misc/samsung/cp_pmu_probe/. No IP block of its own --
+	 * it only touches the shared PMU_ALIVE syscon above, so no `reg`.
+	 */
+	cp_pmu_probe: cp-pmu-probe {
+		compatible = "samsung,exynos7885-cp-pmu-probe";
+		samsung,syscon-phandle = <&pmu_system_controller>;
+		status = "okay";
+	};
 };
 
 &pinctrl_top {

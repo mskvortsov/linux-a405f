@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config CP_PMU_PROBE
+	tristate "Samsung CP (modem) PMU-only bring-up probe"
+	depends on (ARCH_EXYNOS && OF) || COMPILE_TEST
+	help
+	  Isolated PMU_ALIVE bring-up probe for the CP (Shannon SS310AP
+	  modem) domain -- no mailbox, no firmware, no SMC, no SIPC. Exists
+	  to answer one question: is CENTRAL_SEQ_CP_STATUS (PMU_ALIVE
+	  0x0284) unreachable because nothing has ever issued the CP
+	  domain's cal_cp_init() equivalent, or for some other reason? See
+	  gnss.md in the tree root, "Downstream sources for CP init and
+	  firmware load".
+
+	  This is not a modem driver and never will be -- it does not touch
+	  the CP mailbox's IPC channel, does not load firmware, and cannot
+	  bring up the cellular stack. Say M here only if you are
+	  live-probing this specific PMU question; the offsets it touches
+	  have not been individually confirmed safe to read (see the
+	  driver's own comments and gnss.md's warnings about hanging the
+	  device from untested PMU_ALIVE offsets).

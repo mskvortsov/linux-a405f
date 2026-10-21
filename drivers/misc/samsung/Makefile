@@ -2,3 +2,4 @@
 
 obj-y	+= scsc/
 obj-y	+= gnss_kepler/
+obj-y	+= cp_pmu_probe/

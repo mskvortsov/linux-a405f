@@ -2,3 +2,4 @@
 
 source "drivers/misc/samsung/scsc/Kconfig"
 source "drivers/misc/samsung/gnss_kepler/Kconfig"
+source "drivers/misc/samsung/cp_pmu_probe/Kconfig"
