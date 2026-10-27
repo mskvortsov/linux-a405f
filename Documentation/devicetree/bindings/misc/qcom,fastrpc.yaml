@@ -21,6 +21,7 @@ properties:
     oneOf:
       - enum:
           - qcom,kaanapali-fastrpc
+          - qcom,msm8610-fastrpc
           - qcom,fastrpc
       - items:
           - enum:
